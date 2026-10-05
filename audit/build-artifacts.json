@@ -1,0 +1,18 @@
+{
+  "version": "1.4.0",
+  "unsigned": true,
+  "runtimeFilesMatched": 19,
+  "archiveEntries": 959,
+  "artifacts": [
+    {
+      "file": "RepoHub-Setup-1.4.0.exe",
+      "size": 112208597,
+      "sha256": "986fec2cad314acb84172738d8fcee5d05542541531214fb4d15b88746d746a1"
+    },
+    {
+      "file": "RepoHub-1.4.0-portable.exe",
+      "size": 111965689,
+      "sha256": "4e133f2102ed33759e30f9bed1d99e0837931e87e20deb944dfb42e11eea40e2"
+    }
+  ]
+}

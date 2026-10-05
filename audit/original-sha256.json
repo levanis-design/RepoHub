@@ -1,0 +1,110 @@
+﻿[
+    {
+        "Path":  ".gitignore",
+        "Hash":  "5E789CB7BC1878BE6161310E77139B44326FC5A5A915D560D719964ADB2732E3"
+    },
+    {
+        "Path":  "auth.js",
+        "Hash":  "A3EDE2BBE4D5AE117042638AB0B4CCA50406D2DF16DFE2BEF89188F8EE0B78BC"
+    },
+    {
+        "Path":  "build-windows.bat",
+        "Hash":  "8D41C25E57E092ACA069EEC5515836C1989B0F9621E6F85FE854A3D9D8515068"
+    },
+    {
+        "Path":  "charts.js",
+        "Hash":  "6732DD45E16917864E5C50DC85CCCD546993C2D534926278D5D9FEC6AEA50018"
+    },
+    {
+        "Path":  "CLAUDE.md",
+        "Hash":  "496FDD6AD910386B19172270206F84FF81EAD2102CC3F37FB9865C3BBEDFEEF4"
+    },
+    {
+        "Path":  "collections.js",
+        "Hash":  "DE421E9680E0E37647088BA375791AB0E5FD1042786F709C42F20152BD42F99E"
+    },
+    {
+        "Path":  "explain.js",
+        "Hash":  "98556603E370E71B563543DCC12FA1731CE5B0C63E335F99A86FAD6ABE6B6757"
+    },
+    {
+        "Path":  "github.js",
+        "Hash":  "129001C72A95771DFA91324835AAFB6264766905FC7DBD22BD12E6E65E4D9925"
+    },
+    {
+        "Path":  "icon.ico",
+        "Hash":  "A0809733023C5AEBB04C4723A2736400FA78F8D56F5766C3723837823AB249E8"
+    },
+    {
+        "Path":  "icon.png",
+        "Hash":  "A96B617AB7FBA53996171DDFD3C6AD8D6CBF467DF4371A234589A441782997BD"
+    },
+    {
+        "Path":  "index.html",
+        "Hash":  "645B02F3E1870DA9E7F41983BE9D2DEFA7FE6DCE30463AF639DE274B2528A2FB"
+    },
+    {
+        "Path":  "insights.js",
+        "Hash":  "9397F9CB53DDA4D91DB60EF478F7E573201DA7637E2EFB1834CFCF0F49FA5EA0"
+    },
+    {
+        "Path":  "installers.js",
+        "Hash":  "EE5F9C068E23C5E92DD044176C8061C20A039E30826EFA572792A499367B5A3A"
+    },
+    {
+        "Path":  "main.js",
+        "Hash":  "1DC854B06A551967DD44E0E11FA3F7D44B5B86126165FD8FCB856CC84C8F773C"
+    },
+    {
+        "Path":  "package-lock.json",
+        "Hash":  "22D118B367B3D57F047FE5B829DC113BC879F8E2A93A1BFCD9C6F47754ED6C89"
+    },
+    {
+        "Path":  "package.json",
+        "Hash":  "BDFF840158BBFFE406AE6C54EAB49C468F6A90CA7C92380E90F2AC2D540E3445"
+    },
+    {
+        "Path":  "preload.js",
+        "Hash":  "DB25E91890DFED541213A47E747124DF8C323A9F39D858E4B729B8C5D4C811BF"
+    },
+    {
+        "Path":  "README.md",
+        "Hash":  "1207A3343F09F8D669DEE51D9C4323C5FA64CF25E985BFCB11019AF0A2EB149C"
+    },
+    {
+        "Path":  "renderer.js",
+        "Hash":  "F9D3898217AB78C885E996660F86FEF5215B5C9A646DE3635FA2A34661E21C26"
+    },
+    {
+        "Path":  "repos.js",
+        "Hash":  "735AE57EBB76E18EBBB6527DA64FAC839B209A7F0B214F1F88F651F0A8208251"
+    },
+    {
+        "Path":  "runner.js",
+        "Hash":  "2A6CC6112A617A0D019BC7A8F962EAD731EBC92DE0ED08A945F5DADBCB7AF9F8"
+    },
+    {
+        "Path":  "sandbox.js",
+        "Hash":  "AE94337486544B4E8EF001F43FA76F5343F4938365957845240D5015091148C2"
+    },
+    {
+        "Path":  "settings.js",
+        "Hash":  "D7003C6E837DAD0013509C4E18156338DA2F0A95E6165FC34A9BB5D7CF9D9E8E"
+    },
+    {
+        "Path":  "start.bat",
+        "Hash":  "05231661D4B579B9DF3FD926077796C1DDAE5B86DFCEB26E75E03C0BE180C66E"
+    },
+    {
+        "Path":  "styles.css",
+        "Hash":  "3E8CA41D1FBF61914C95C99A8D8E872EC7B01D52DBA7B860426DDFF0A31EC745"
+    },
+    {
+        "Path":  "tooling.js",
+        "Hash":  "6622E125ABA1FAA548EA4809B96CB2D2160990F85E96D511E93ED7CAA895875E"
+    },
+    {
+        "Path":  "dev\\check-engine.js",
+        "Hash":  "971CC5D1E806340E6FB8CD437E93DD1EFB693BD186266E4A347CC49CFB5A4ABB"
+    }
+]
