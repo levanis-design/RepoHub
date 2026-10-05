@@ -126,3 +126,9 @@ Supported devcontainer fields: `image`, string or argument-array `postCreateComm
 Agent account rows report installation, not authenticated sessions. Complete sign-in in the tool's own window. The npm Yarn installer installs Yarn Classic; modern Yarn projects need their documented Corepack setup.
 
 The original package metadata declares MIT, but no license text was supplied with the local app. This audit does not add or invent a license grant.
+
+## Screenshots
+![RepoHub screenshot](01-library-by-category.png)
+![RepoHub screenshot](05-try-before-install.png)
+![RepoHub screenshot](demo-sort-and-resize.gif)
+![RepoHub screenshot](themes.png)
