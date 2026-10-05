@@ -40,6 +40,8 @@ const DEFAULTS = {
   owner: '',          // your GitHub account; repos under it are grouped as "Mine"
   commands: {},       // per-repo custom commands: { "<path>": ["npm run build", ...] }
   last: [],           // last scan result, so the list shows instantly on open
+  categories: {},     // your own category for a repository: { "<path>": "web" } (categories.js)
+  authSource: '',     // which login RepoHub uses for GitHub requests: 'gh', 'git' or ''
 };
 
 function readConfig() {

@@ -52,13 +52,16 @@
             <option value="mine">Mine</option>
             <option value="others">Others</option>
           </select>
+          <select id="sort" title="Sort the list"><option value="recent">Most recent</option></select>
         </div>
       </div>
       <div id="summary-tiles" class="tiles"></div>
       <div id="repo-list" class="repo-list"></div>
     </aside>
 
+    <div id="side-split" class="splitter side-split" role="separator" aria-orientation="vertical" aria-label="Resize the repository list" tabindex="0" title="Drag to resize. Double-click to reset."></div>
     <main id="main" class="main"></main>
+    <div id="dock-split" class="splitter dock-split" role="separator" aria-orientation="vertical" aria-label="Resize Settings" tabindex="0" title="Drag to resize. Double-click to reset."></div>
     <aside id="settings-dock" class="settings-dock" hidden></aside>
   </div>
 

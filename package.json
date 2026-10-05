@@ -1,7 +1,7 @@
 {
   "name": "repohub",
   "productName": "RepoHub",
-  "version": "1.4.0",
+  "version": "1.6.0",
   "description": "RepoHub — see what a GitHub repository is before installing it, install it in two steps, and keep every repository on this computer committed, synced and runnable.",
   "main": "main.js",
   "scripts": {

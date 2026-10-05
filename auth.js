@@ -10,14 +10,20 @@
        memory only, and sends it only to api.github.com and raw.githubusercontent.com
      - it is never written to disk, logged or shown; "Sign out" forgets it
 
-   Only the on/off choice is saved (useGh in repos.json). */
+   Since 1.5.0 the login can instead come from Git's own sign-in (Git
+   Credential Manager, see gitauth.js): the same token Git uses for clone,
+   pull and push, read with prompts disabled and kept in memory only.
+
+   Only the choice is saved (authSource in repos.json: 'gh', 'git' or ''). */
 
 const { spawn } = require('child_process');
 const { toolEnv, spawnTool, IS_WIN } = require('./tooling');
 const repos = require('./repos');
+const gitauth = require('./gitauth');
 
 let token = '';
 let user = null; // { login, name }
+let source = ''; // 'gh' | 'git'
 
 function readGhToken() {
   return new Promise((resolve) => {
@@ -54,33 +60,44 @@ function headers(extra = {}) {
   return h;
 }
 
-/* Sign in: read the CLI's token and confirm it works. */
-async function signIn(fetcher) {
-  const r = await readGhToken();
+/* Sign in: read the chosen login (GitHub CLI or Git) and confirm it works. */
+async function signIn(fetcher, from = 'gh') {
+  const via = from === 'git' ? 'git' : 'gh';
+  const r = via === 'git' ? await gitauth.readToken() : await readGhToken();
   if (!r.ok) {
-    token = ''; user = null;
+    token = ''; user = null; source = '';
+    if (via === 'git') {
+      if (r.missing) return { ok: false, missing: true, error: 'Git is not installed. Install Git for Windows in Settings → Installers, then sign in.' };
+      return { ok: false, notSignedIn: true, error: 'Git has no saved GitHub login yet. Press "Sign in to GitHub" under Git sign-in, finish in the browser, then press "Use my Git sign-in" again.' };
+    }
     if (r.missing) return { ok: false, missing: true, error: 'The GitHub CLI is not installed. Install it from cli.github.com, then press Sign in again.' };
     if (r.notSignedIn) return { ok: false, notSignedIn: true, error: 'The GitHub CLI is installed but not signed in. Use "Sign in with the GitHub CLI" to open the sign-in, finish it in the browser, then press Sign in again.' };
     return { ok: false, error: r.error || 'Could not read the GitHub CLI login.' };
   }
   token = r.token;
   user = await whoAmI(fetcher);
-  if (!user) { token = ''; return { ok: false, error: 'GitHub did not accept the GitHub CLI login. Run "gh auth login" again.' }; }
-  repos.writeConfig({ useGh: true });
-  return { ok: true, user };
+  if (!user) {
+    token = '';
+    return { ok: false, error: via === 'git' ? 'GitHub did not accept the login saved in Git. Sign out under Git sign-in and sign in again.' : 'GitHub did not accept the GitHub CLI login. Run "gh auth login" again.' };
+  }
+  source = via;
+  repos.writeConfig({ authSource: via, useGh: via === 'gh' });
+  return { ok: true, user, source };
 }
 
 function signOut() {
-  token = ''; user = null;
-  repos.writeConfig({ useGh: false });
+  token = ''; user = null; source = '';
+  repos.writeConfig({ authSource: '', useGh: false });
   return { ok: true };
 }
 
-/* On start: sign in quietly if the user chose it before. */
+/* On start: sign in quietly with the login chosen before. */
 async function restore(fetcher) {
-  if (!repos.readConfig().useGh) return { ok: true, signedIn: false };
-  const r = await signIn(fetcher);
-  return { ok: true, signedIn: r.ok, user: r.user };
+  const cfg = repos.readConfig();
+  const via = cfg.authSource || (cfg.useGh ? 'gh' : '');
+  if (!via) return { ok: true, signedIn: false };
+  const r = await signIn(fetcher, via);
+  return { ok: true, signedIn: r.ok, user: r.user, source: r.source };
 }
 
 async function status(fetcher) {
@@ -89,7 +106,7 @@ async function status(fetcher) {
     const res = await fetcher('https://api.github.com/rate_limit', { headers: headers() });
     if (res.ok) { const j = await res.json(); rate = { core: j.resources.core, search: j.resources.search }; }
   } catch { /* offline */ }
-  return { ok: true, signedIn: !!token, user, rate };
+  return { ok: true, signedIn: !!token, user, rate, source };
 }
 
 module.exports = { headers, signIn, signOut, restore, status, hasToken: () => !!token };

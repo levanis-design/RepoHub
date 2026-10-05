@@ -11,6 +11,9 @@
      collections.js  bookmarks, collections, notes, tags and recently viewed
      settings.js     every setting, validated; changes reach every window
      installers.js   the tool catalog: check, install (winget or npm), sign in
+     categories.js   what each repository is for (grouping the list)
+     gitauth.js      Git's own sign-in (Git Credential Manager)
+     aitools.js      GitIngest, GitDiagram, DeepWiki and GitMCP links for a repository
      tooling.js  running git and the other command-line tools */
 
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = require('electron');
@@ -28,6 +31,9 @@ const insights = require('./insights');
 const saved = require('./collections');
 const settings = require('./settings');
 const installers = require('./installers');
+const categories = require('./categories');
+const gitauth = require('./gitauth');
+const aitools = require('./aitools');
 const { git, probe, firstLine, toolEnv, spawnTool } = require('./tooling');
 
 let win = null;
@@ -183,6 +189,19 @@ function registerIpc() {
   handle('repos:saveSettings', (patch) => repos.saveSettings(patch));
   handle('repos:addFolder', ({ dir }) => repos.addExtra(dir));
   handle('repos:clone', ({ url, parent }) => repos.clone(url, parent));
+  handle('repos:categories', ({ dirs }) => {
+    const list = (Array.isArray(dirs) ? dirs : []).filter((d) => typeof d === 'string' && repos.known(d));
+    return { ok: true, list: categories.CATEGORIES, categories: categories.forRepos(list, repos.readConfig().categories || {}) };
+  });
+  handle('repos:setCategory', ({ dir, id }) => {
+    if (!repos.known(dir)) return { ok: false, error: 'Unknown repository.' };
+    if (id && !categories.IDS.has(id)) return { ok: false, error: 'Unknown category.' };
+    const map = { ...(repos.readConfig().categories || {}) };
+    for (const k of Object.keys(map)) if (path.resolve(k).toLowerCase() === path.resolve(dir).toLowerCase()) delete map[k];
+    if (id) map[dir] = id;
+    repos.writeConfig({ categories: map });
+    return { ok: true, category: categories.forRepos([dir], map)[dir] };
+  });
   handle('repos:runOptions', ({ dir }) => (repos.known(dir) ? repos.runOptions(dir) : { ok: false, error: 'Unknown repository.' }));
 
   // Understanding a repository
@@ -270,8 +289,14 @@ function registerIpc() {
 
   // GitHub login through the GitHub CLI
   handle('auth:status', () => auth.status(github.doFetch));
-  handle('auth:signIn', () => auth.signIn(github.doFetch));
+  handle('auth:signIn', ({ source }) => auth.signIn(github.doFetch, source === 'git' ? 'git' : 'gh'));
   handle('auth:signOut', () => auth.signOut());
+  // Git's own sign-in (Git Credential Manager). Only these fixed commands run.
+  handle('gitauth:status', () => gitauth.status());
+  handle('gitauth:login', () => runner.openTerminal(app.getPath('home'), gitauth.LOGIN_COMMAND));
+  handle('gitauth:logout', ({ account }) => gitauth.logout(account));
+  handle('gitauth:useGcm', () => gitauth.useGcm());
+  handle('gitauth:useGh', () => runner.openTerminal(app.getPath('home'), 'gh auth setup-git --hostname github.com'));
   handle('auth:openCliLogin', () => runner.openTerminal(app.getPath('home'), 'gh auth login --hostname github.com --git-protocol https --web'));
 
   // Insights and files
@@ -328,9 +353,32 @@ function registerIpc() {
     const npmAvailable = !!(await probe('npm', ['--version']));
     const needsNpm = list.filter((id) => { const t = installers.CATALOG.find((x) => x.id === id); return t.npm && !(process.platform === 'win32' && t.winget); });
     if (needsNpm.length && !npmAvailable && !list.includes('node')) return { ok: false, error: 'These install with npm, which comes with Node.js: install Node.js first (or tick it too), then try again.' };
+    const needsUv = list.filter((id) => installers.CATALOG.find((x) => x.id === id).uv);
+    if (needsUv.length && !list.includes('uv') && !(await probe('uv', ['--version']))) return { ok: false, error: 'Mistral Vibe installs with uv: install uv first (or tick it too), then try again.' };
     const file = installers.script(list, { npmAvailable });
     return file ? runner.openScript(file) : { ok: false, error: 'Nothing to install.' };
   });
+  handle('installers:signOut', ({ id }) => {
+    const cmd = installers.SIGN_OUT[id];
+    if (!cmd) return { ok: false, error: 'No sign-out for that tool.' };
+    return runner.openTerminal(app.getPath('home'), cmd);
+  });
+  handle('installers:providerKey', async ({ id }) => {
+    const p = installers.PROVIDERS.find((x) => x.id === id);
+    if (!p) return { ok: false, error: 'Unknown provider.' };
+    await shell.openExternal(p.keyUrl);
+    return { ok: true };
+  });
+  // AI viewers for a repository: links are built in aitools.js from a checked owner/repo.
+  handle('aitools:links', ({ full }) => aitools.links(full));
+  handle('aitools:open', async ({ service, full }) => {
+    const u = aitools.url(service, full);
+    if (!u) return { ok: false, error: 'That tool or repository is not recognized.' };
+    await shell.openExternal(u);
+    return { ok: true };
+  });
+  handle('aitools:mcpCommand', ({ full }) => { const c = aitools.mcpCommand(full); return c ? { ok: true, text: c.text, name: c.name } : { ok: false, error: 'Not a GitHub repository.' }; });
+  handle('aitools:addMcp', ({ full }) => aitools.addToClaude(full));
   handle('installers:signIn', ({ id }) => {
     const s2 = installers.SIGN_IN[id];
     if (!s2) return { ok: false, error: 'No sign-in for that tool.' };

@@ -1,0 +1,122 @@
+Downloading Electron binary...
+PASS scan finds real repos, skips empty .git and node_modules (alpha,beta,grafsnas-main)
+PASS grafsnas hidden by default
+PASS clean status
+PASS reading status leaves no lock file
+PASS counts new and changed files
+PASS shows a new file
+PASS refuses files outside the repository
+PASS pull refuses over uncommitted work
+PASS commit
+PASS one commit to push
+PASS push
+PASS fetch
+PASS one new commit on the remote
+PASS pull
+PASS conflicting sync is explained
+PASS conflicting sync is undone
+PASS sync (Committed 1 file,Pushed to GitHub)
+PASS actions wait for a lock file
+PASS empty lock cleared
+PASS refuses repositories outside the list
+PASS push without a remote is explained
+PASS remote with a token in it is refused
+PASS run options (npm install|npm start|npm run build|npm run postinstall)
+PASS Update all explains a missing remote
+PASS Update all fetches and preserves dirty files
+PASS Update all fast-forwards a clean behind repository
+PASS Update all reports an already current repository
+PASS Update all preserves divergent local history
+PASS Update all reports an unavailable remote
+PASS parses a deep GitHub link
+PASS parses an SSH address
+PASS parses owner/repo
+PASS rejects other hosts and bad names
+PASS kind (Node.js project)
+PASS warns about install scripts
+PASS install plan
+PASS python web app
+PASS reads .env.example names only
+PASS cautions: pipe to shell, no license, stale
+PASS Claude context built
+PASS vite plan (npm run dev -- --host 0.0.0.0 --port 5173)
+PASS next + pnpm plan (corepack enable && pnpm install / pnpm dev -- -H 0.0.0.0 -p 3000)
+PASS streamlit plan with settings note
+PASS static site plan
+PASS Dockerfile-only repo uses its Dockerfile
+PASS Electron app explained, no start
+PASS sandbox address checks
+PASS only RepoHub sandboxes can be touched
+PASS shell command safe for Windows Terminal
+PASS local file list
+PASS local file read
+PASS local file outside the repository refused
+PASS binary file detected
+PASS strong repository scores high (96, Actively maintained)
+PASS abandoned repository scores low (11)
+PASS archived repository is capped and flagged
+PASS bus factor
+PASS score parts add up to 100
+PASS save a repository
+PASS create collection, refuse duplicate
+PASS tags cleaned, unknown collections dropped
+PASS refuses a bad name
+PASS CSV export quotes properly
+PASS JSON export by collection
+PASS recently viewed, newest first, no duplicates
+PASS deleting a collection keeps the repositories
+PASS settings defaults
+PASS settings saved
+PASS invalid settings refused by name, old values kept
+PASS reset one setting
+PASS catalog has every requested tool and agent
+PASS npm command for an agent
+PASS installer script: only catalog tools, npm is never installed on its own
+PASS nothing chosen, no script
+PASS sign-in commands are fixed and plain
+PASS Windows: no current-folder lookup
+PASS probe finds the real git, not a git.js file
+PASS devcontainer recipe used (mcr.microsoft.com/devcontainers/typescript-node:1-20-bullseye, npm ci)
+PASS recipe fields
+PASS comments stripped, addresses kept
+PASS writing style and length in the prompt
+PASS prompt has no quotation marks (safe on Windows)
+PASS category skill → skills (SKILL.md at the top level)
+PASS category electron → desktop (electron in the project files)
+PASS category next → web (next in the dependencies)
+PASS category express → server (express in the dependencies)
+PASS category mcp → mcp (@modelcontextprotocol/sdk and "MCP server" in the README)
+PASS category agent → agents (anthropic in the dependencies)
+PASS category cli → cli ("bin" in package.json)
+PASS category data → data (pandas in the dependencies)
+PASS category notes → docs (only documents and notes at the top level)
+PASS category wp → web (WordPress files)
+PASS category video → media (remotion in the dependencies)
+PASS your own category wins (case-insensitive path on Windows)
+PASS unknown chosen category falls back to the guess
+PASS a link pointing outside the repository is not read
+PASS sort and separator settings validated
+PASS credential helpers named
+PASS account names validated
+PASS logout refuses a bad account name
+PASS git sign-in status reads (helper: Git Credential Manager)
+PASS four AI viewer links built from a GitHub address
+PASS owner/repo accepted
+PASS refused: "https://evil.com/a/b"
+PASS refused: "../x"
+PASS refused: "a/b/c"
+PASS refused: "owner/repo\"&calc"
+PASS refused: "javascript:alert(1)/x"
+PASS refused: ""
+PASS unknown service refused
+PASS GitMCP command is fixed and safe for Windows
+PASS agents in the catalog: claude, codex, gemini, copilot, qwen, kimi, ollama, opencode, kilo, cline, droid, vibe
+PASS every agent has a sign-in command
+PASS sign-in and sign-out commands are plain fixed text
+PASS uv and npm install commands
+PASS Ollama through winget on Windows
+PASS provider key pages are fixed official addresses
+PASS installer script runs uv for Mistral Vibe
+PASS check() reports sign-in, sign-out and providers
+
+All checks passed

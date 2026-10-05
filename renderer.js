@@ -92,6 +92,10 @@
     output: new Map(),       // dir → text
     local: new Map(),        // dir → { info, facts, summary }
     tools: null,             // { git: 'git version …', node: '', … }
+    cats: {},                // dir → { id, label, why, mine } (categories.js)
+    catList: [],             // [[id, label], …] in display order
+    collapsed: new Set(),    // category groups folded in the list
+    sort: 'recent',          // recent | name | name-desc | attention | category
   };
   const st = (p) => S.status[p] || null;
   const repoByPath = (p) => S.repos.find((r) => r.path === p);
@@ -99,16 +103,55 @@
   const attention = (s) => !!s && s.ok && (s.changed > 0 || s.ahead > 0 || s.behind > 0 || s.locked || s.conflicts > 0 || !s.remote);
 
   /* ---------- library (left) ---------- */
+  const catOf = (r) => S.cats[r.path] || null;
+  const catRank = (r) => { const c = catOf(r); const i = c ? S.catList.findIndex(([id]) => id === c.id) : -1; return i < 0 ? 999 : i; };
+  const attScore = (r) => { const s2 = st(r.path); return s2 && s2.ok ? (s2.conflicts ? 100 : 0) + (s2.locked ? 50 : 0) + s2.changed + s2.ahead * 2 + s2.behind * 3 : -1; };
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const byRecent = (a, b) => String((st(b.path) || {}).lastDate || '').localeCompare(String((st(a.path) || {}).lastDate || '')) || byName(a, b);
+  const SORTS = [['recent', 'Most recent', 'Sort: recent'], ['name', 'Name, A to Z', 'Sort: A to Z'], ['name-desc', 'Name, Z to A', 'Sort: Z to A'], ['category', 'Category (what it does)', 'Sort: category'], ['attention', 'Needs attention first', 'Sort: attention']];
+  function sortRows(rows, mode) {
+    const cmp = mode === 'name' ? byName
+      : mode === 'name-desc' ? (a, b) => byName(b, a)
+        : mode === 'attention' ? (a, b) => attScore(b) - attScore(a) || byRecent(a, b)
+          : mode === 'category' ? (a, b) => catRank(a) - catRank(b) || byName(a, b)
+            : byRecent;
+    return rows.slice().sort(cmp);
+  }
+  /* Rows split into category groups, in category order: [{ id, label, rows }]. */
+  function groupByCategory(rows) {
+    const groups = new Map();
+    for (const r of rows) {
+      const c = catOf(r) || { id: 'unknown', label: 'Reading…' };
+      if (!groups.has(c.id)) groups.set(c.id, { id: c.id, label: c.label, rows: [] });
+      groups.get(c.id).rows.push(r);
+    }
+    return [...groups.values()];
+  }
   function visible() {
-    return S.repos.filter((r) => {
+    return sortRows(S.repos.filter((r) => {
       if (r.hidden && !S.showHidden) return false;
       const s = st(r.path);
       if (S.view === 'attention' && !attention(s)) return false;
       if (S.view === 'mine' && !isMine(r)) return false;
       if (S.view === 'others' && isMine(r)) return false;
-      if (S.filter && !`${r.name} ${r.path} ${(s && s.remote) || ''}`.toLowerCase().includes(S.filter)) return false;
+      if (S.filter && !`${r.name} ${r.path} ${(s && s.remote) || ''} ${(catOf(r) || {}).label || ''}`.toLowerCase().includes(S.filter)) return false;
       return true;
-    }).sort((a, b) => String((st(b.path) || {}).lastDate || '').localeCompare(String((st(a.path) || {}).lastDate || '')) || a.name.localeCompare(b.name));
+    }), S.sort);
+  }
+  async function loadCategories() {
+    const r = await hub.repos.categories(S.repos.map((x) => x.path)).catch(() => null);
+    if (!r || !r.ok) return;
+    S.cats = r.categories || {};
+    S.catList = r.list || [];
+    paintList();
+    if (S.sel && S.sel.type === 'grid') paintGrid();
+    else if (S.sel && S.sel.type === 'repo') paintMain();
+  }
+  function setSort(mode) {
+    S.sort = mode;
+    const el = $('sort'); if (el) el.value = mode;
+    paintList();
+    setSetting({ librarySort: mode });
   }
 
   function chips(s, r) {
@@ -145,15 +188,26 @@
     const rows = visible();
     if (!S.repos.length) { list.replaceChildren(h('div', { class: 'empty', text: 'No repositories found yet. Use More → Rescan, or paste a link above and install one.' })); return; }
     if (!rows.length) { list.replaceChildren(h('div', { class: 'empty', text: 'Nothing matches.' })); return; }
-    list.replaceChildren(...rows.map((r) => {
+    const rowEl = (r) => {
       const s = st(r.path);
       const sel = S.sel && S.sel.type === 'repo' && S.sel.path === r.path;
-      return h('button', { class: `repo-row${sel ? ' sel' : ''}${r.hidden ? ' hidden-repo' : ''}`, title: r.path, onclick: () => openRepo(r.path) },
+      const c = catOf(r);
+      return h('button', { class: `repo-row${sel ? ' sel' : ''}${r.hidden ? ' hidden-repo' : ''}`, title: c ? `${r.path}\n${c.label} (${c.why})` : r.path, onclick: () => openRepo(r.path) },
         h('div', { class: 'row-top' }, h('span', { class: 'row-name', text: r.name }),
           S.busy.has(r.path) ? h('span', { class: 'spin', text: '⟳' }) : null,
           h('span', { class: 'grow' }), h('span', { class: 'dim', text: (s && s.lastDate) || '' })),
         h('div', { class: 'row-sub' }, h('span', { class: 'dim mono', text: [ownerOf(s && s.remote), s && s.branch].filter(Boolean).join(' · ') }),
+          c && S.sort !== 'category' ? h('span', { class: 'row-cat', text: c.label }) : null,
           h('span', { class: 'grow' }), ...chips(s, r)));
+    };
+    if (S.sort !== 'category') { list.replaceChildren(...rows.map(rowEl)); return; }
+    list.replaceChildren(...groupByCategory(rows).flatMap((g) => {
+      const folded = S.collapsed.has(g.id) && !S.filter;
+      return [
+        h('button', { class: `group-head${folded ? ' folded' : ''}`, 'aria-expanded': folded ? 'false' : 'true', title: folded ? 'Show this group' : 'Fold this group', onclick: () => { if (S.collapsed.has(g.id)) S.collapsed.delete(g.id); else S.collapsed.add(g.id); paintList(); } },
+          h('span', { class: 'caret', text: folded ? '▸' : '▾' }), h('span', { class: 'grow', text: g.label }), h('span', { class: 'count', text: String(g.rows.length) })),
+        ...(folded ? [] : g.rows.map(rowEl)),
+      ];
     }));
   }
 
@@ -172,9 +226,10 @@
     if (!r || !r.ok) { fail(r, 'The scan failed.'); return; }
     S.repos = r.repos;
     if (r.timedOut) toast('The scan stopped after a minute. Narrow the folders in Tools.', 8000);
+    loadCategories().catch(() => {});
     await refreshAll();
   }
-  async function reloadList() { const c = await hub.repos.cached(); if (c && c.ok) S.repos = c.repos; }
+  async function reloadList() { const c = await hub.repos.cached(); if (c && c.ok) { S.repos = c.repos; loadCategories().catch(() => {}); } }
   async function fetchAll() {
     const list = S.repos.filter((r) => !r.hidden && st(r.path) && st(r.path).remote);
     let done = 0, failed = 0;
@@ -322,10 +377,39 @@
       have
         ? section('Already on this computer', h('div', { class: 'mono dim wrap', text: have.path }), h('div', { class: 'bar' }, h('button', { class: 'btn btn-primary', text: 'Open it', onclick: () => openRepo(have.path) })))
         : installBox(d),
-      sandboxCard({ link: d.web, cloneUrl: d.cloneUrl, repo: d.fullName }));
+      sandboxCard({ link: d.web, cloneUrl: d.cloneUrl, repo: d.fullName }),
+      aiToolsCard(d.fullName, { private: d.private }));
     main.replaceChildren(head, h('div', { class: `split${tab === 'files' ? ' full' : ''}` },
       h('div', { class: 'main-col' }, tabsBar([['overview', 'Overview'], ['health', E.ins ? `Health ${E.ins.total}` : 'Health'], ['activity', 'Activity'], ['files', 'Files'], ['readme', 'README']], tab, (t) => { E.tab = t; paintMain(); }), ...body),
       tab === 'files' ? null : side));
+  }
+
+  /* GitIngest, GitDiagram, DeepWiki and GitMCP for a GitHub repository. The
+     links are built in the main process from the owner and repository name. */
+  const AI_ACTION = { gitingest: 'Open as text', gitdiagram: 'Open diagram', deepwiki: 'Open wiki', gitmcp: 'Open' };
+  function aiToolsCard(full, opts = {}) {
+    const box = h('div', { class: 'ai-tools' }, h('div', { class: 'dim', text: 'Loading…' }));
+    hub.aitools.links(full).then((l) => {
+      if (!l || !l.ok) { box.replaceChildren(h('div', { class: 'dim', text: (l && l.error) || 'Not a GitHub repository.' })); return; }
+      box.replaceChildren(
+        opts.private ? h('div', { class: 'warn-box', text: 'This repository is private. These services only read public repositories.' }) : null,
+        ...l.services.map((sv) => h('div', { class: 'ai-tool' },
+          h('div', { class: 'ai-tool-text' },
+            h('div', { class: 'ai-tool-name' }, h('b', { text: sv.name }), h('span', { class: 'mono dim', text: ` ${sv.host}/${l.full}` })),
+            h('div', { class: 'dim', text: sv.what })),
+          h('div', { class: 'bar tight' },
+            h('button', { class: 'btn btn-sm', text: AI_ACTION[sv.id] || 'Open', title: `Opens ${sv.url} in your browser`, onclick: () => hub.aitools.open(sv.id, l.full).then((x) => x && !x.ok && fail(x)) }),
+            h('button', { class: 'btn btn-sm btn-ghost', text: 'Copy link', onclick: () => copyText(sv.url) }),
+            sv.id === 'gitmcp' ? h('button', { class: 'btn btn-sm btn-accent', text: 'Add to Claude Code', title: 'Lets Claude Code look things up in this repository\'s docs', onclick: () => addGitMcp(l.full) }) : null))));
+    });
+    return section('Explore with AI tools', h('div', { class: 'dim', text: 'Free web services that read public GitHub repositories. Links open in your browser.' }), box);
+  }
+  async function addGitMcp(full) {
+    const c = await hub.aitools.mcpCommand(full);
+    if (!c || !c.ok) { fail(c); return; }
+    if (!(await confirmBox('Add GitMCP to Claude Code?', `Claude Code will be able to look things up in ${full}'s docs in every project. RepoHub runs:\n${c.text}\nRemove it later with: claude mcp remove ${c.name} --scope user`, 'Add to Claude Code'))) return;
+    const r = await hub.aitools.addMcp(full);
+    if (r && r.ok) toast(r.already ? `${r.name} was already in Claude Code.` : `Added ${r.name} to Claude Code. Start a new Claude session to use it.`, 7000, 'good'); else fail(r);
   }
 
   function installBox(d) {
@@ -401,6 +485,23 @@
     });
   }
 
+  /* What the repository is for: RepoHub's guess, or your own choice. */
+  function categoryControl(r) {
+    const c = catOf(r);
+    if (!S.catList.length) return null;
+    const sel = h('select', { class: 'input input-sm', title: 'Category, used to group the list', onchange: async (e) => {
+      const res = await hub.repos.setCategory(r.path, e.target.value === '__auto' ? '' : e.target.value);
+      if (!res || !res.ok) { fail(res); return; }
+      S.cats[r.path] = res.category;
+      paintList(); paintMain();
+    } },
+    h('option', { value: '__auto', text: c && !c.mine ? `Detected: ${c.label}` : 'Let RepoHub detect it' }),
+    S.catList.map(([id, label]) => h('option', { value: id, text: label })));
+    sel.value = c && c.mine ? c.id : '__auto';
+    return h('div', { class: 'bar tight cat-line' }, h('span', { class: 'dim', text: 'Category' }), sel,
+      c ? h('span', { class: 'dim', text: c.mine ? 'chosen by you' : `Reason: ${c.why}` }) : h('span', { class: 'dim', text: 'reading…' }));
+  }
+
   function paintRepo() {
     const p = S.sel.path;
     const r = repoByPath(p);
@@ -420,6 +521,7 @@
       h('div', { class: 'head-title' }, h('span', { class: 'head-name', text: r.name }), ...chips(s, r)),
       h('div', { class: 'mono dim wrap', text: p }),
       s && s.remote ? h('div', { class: 'mono dim wrap', text: s.remote }) : null,
+      categoryControl(r),
       h('div', { class: 'bar' },
         h('button', { class: 'btn btn-primary', text: 'Open Claude here', title: 'A terminal window in this folder, running Claude Code', onclick: () => hub.term.open(p, 'claude').then((x) => x && !x.ok && fail(x)) }),
         btn('Terminal', () => hub.term.open(p, '').then((x) => x && !x.ok && fail(x))),
@@ -450,6 +552,7 @@
         if (res && res.ok) L.summary = { text: res.text, at: new Date().toISOString() }; else fail(res, 'Claude could not explain it.');
         if (S.sel && S.sel.path === p) paintMain();
       }, L.explaining));
+      if (ghWeb) body.push(aiToolsCard(ghWeb));
       body.push(section('What RepoHub found in the files', ...factsBlock(L.facts, L.info),
         !L.facts.claudeReady.claudeMd ? h('div', { class: 'dim tip', text: 'Tip: Open Claude here and type /init to have Claude write a CLAUDE.md for this project.' }) : null));
     } else if (tab === 'git') {
@@ -536,6 +639,18 @@
     ov.hidden = false;
     ov.onclick = close;
     return { card, close };
+  }
+  /* Yes or no, in the app's own dialog. Resolves true only on the confirm button. */
+  function confirmBox(title, text, yes = 'OK') {
+    return new Promise((resolve) => {
+      let answered = false;
+      const done = (v) => { if (answered) return; answered = true; resolve(v); };
+      const { close } = overlay(title, 480, h('div', { class: 'dim', text }),
+        h('div', { class: 'bar end' }, h('button', { class: 'btn', text: 'Cancel', onclick: () => { close(); done(false); } }), h('button', { class: 'btn btn-primary', text: yes, onclick: () => { close(); done(true); } })));
+      const ov = $('overlay');
+      const prev = ov.onclick;
+      ov.onclick = () => { prev && prev(); done(false); };
+    });
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('overlay').hidden) { $('overlay').hidden = true; $('overlay').replaceChildren(); } });
 
@@ -839,30 +954,79 @@
     const el = $('auth-chip');
     if (!el) return;
     const core = S.auth.rate && S.auth.rate.core;
-    el.textContent = S.auth.signedIn ? `GitHub: ${S.auth.user ? S.auth.user.login : 'signed in'}` : 'GitHub: signed out';
+    el.textContent = S.auth.signedIn ? `GitHub: ${S.auth.user ? S.auth.user.login : 'signed in'}` : 'GitHub: not connected';
     el.className = `chip ${S.auth.signedIn ? 'ok' : ''}`;
     el.title = core ? `${core.remaining} of ${core.limit} GitHub requests left this hour` : '';
   }
+  /* RepoHub's own GitHub requests: borrow Git's saved login or the GitHub CLI's. */
   function loginSection() {
     const box = h('div', {});
+    const signIn = (source) => async (e) => {
+      e.target.disabled = true;
+      const r = await hub.auth.signIn(source);
+      e.target.disabled = false;
+      if (r && r.ok) toast(`Signed in as ${r.user.login}.`, 5000, 'good'); else fail(r);
+      await refreshAuth(); paint();
+    };
     const paint = () => {
       const core = S.auth.rate && S.auth.rate.core;
+      const via = S.auth.source === 'git' ? 'your Git sign-in' : 'the GitHub CLI';
       box.replaceChildren(
         h('div', { class: 'dim', text: S.auth.signedIn
-          ? `Signed in as ${S.auth.user ? S.auth.user.login : '(unknown)'} through the GitHub CLI.${core ? ` ${core.remaining} of ${core.limit} requests left this hour.` : ''}`
-          : `Signed out: GitHub allows 60 requests an hour${core ? ` (${core.remaining} left)` : ''}. Signing in raises it to 5,000, adds star history and opens private repositories. RepoHub borrows the GitHub CLI's login and never stores it.` }),
-        h('div', { class: 'bar' },
+          ? `Connected as ${S.auth.user ? S.auth.user.login : '(unknown)'} through ${via}.${core ? ` ${core.remaining} of ${core.limit} requests left this hour.` : ''}`
+          : `Not connected: GitHub allows 60 requests an hour${core ? ` (${core.remaining} left)` : ''}. Connecting raises it to 5,000, adds star history and opens private repositories. RepoHub borrows a login you already have, keeps it in memory only and never stores it.` }),
+        h('div', { class: 'bar wrap' },
           S.auth.signedIn
-            ? h('button', { class: 'btn btn-sm', text: 'Sign out', onclick: async () => { await hub.auth.signOut(); await refreshAuth(); paint(); } })
-            : h('button', { class: 'btn btn-sm btn-primary', text: 'Sign in', onclick: async (e) => {
-              e.target.disabled = true;
-              const r = await hub.auth.signIn();
-              e.target.disabled = false;
-              if (r && r.ok) toast(`Signed in as ${r.user.login}.`, 5000, 'good'); else fail(r);
-              await refreshAuth(); paint();
-            } }),
-          !S.auth.signedIn ? h('button', { class: 'btn btn-sm', text: 'Sign in with the GitHub CLI', title: 'Opens a terminal running "gh auth login"; finish in the browser, then press Sign in', onclick: () => hub.auth.openCliLogin().then((x) => x && !x.ok && fail(x)) }) : null,
-          !S.auth.signedIn ? h('button', { class: 'btn btn-sm', text: 'Get the GitHub CLI', onclick: () => hub.open.web('https://cli.github.com/') }) : null));
+            ? h('button', { class: 'btn btn-sm', text: 'Disconnect', title: 'RepoHub forgets the login. Git and the GitHub CLI stay signed in.', onclick: async () => { await hub.auth.signOut(); await refreshAuth(); paint(); } })
+            : [
+              h('button', { class: 'btn btn-sm btn-primary', text: 'Use my Git sign-in', title: 'The same GitHub login Git uses for clone, pull and push (Git Credential Manager)', onclick: signIn('git') }),
+              h('button', { class: 'btn btn-sm', text: 'Use the GitHub CLI login', title: 'The login held by the GitHub CLI (gh)', onclick: signIn('gh') }),
+              h('button', { class: 'btn btn-sm', text: 'Sign in with the GitHub CLI', title: 'Opens a terminal running "gh auth login"; finish in the browser, then press Use the GitHub CLI login', onclick: () => hub.auth.openCliLogin().then((x) => x && !x.ok && fail(x)) }),
+            ]));
+    };
+    paint();
+    return box;
+  }
+
+  /* Git's own sign-in: Git Credential Manager, which clone, pull and push use. */
+  function gitSignInSection(onChange) {
+    const box = h('div', { class: 'git-signin' }, h('div', { class: 'dim', text: 'Checking Git…' }));
+    const paint = async () => {
+      const g = await hub.gitauth.status().catch(() => null);
+      if (!g || !g.ok) { box.replaceChildren(h('div', { class: 'dim', text: (g && g.error) || 'Could not read the Git sign-in.' })); return; }
+      if (!g.git) {
+        box.replaceChildren(h('div', { class: 'dim', text: g.note }), h('div', { class: 'bar' }, h('button', { class: 'btn btn-sm btn-primary', text: 'Install Git', onclick: () => runInstall(['git']) })));
+        return;
+      }
+      const kids = [h('div', { class: 'dim', text: `Git ${g.git}. Saved logins are kept by ${g.helper.label}.${g.gcm ? ` Git Credential Manager ${g.gcm}.` : ''}` })];
+      if (!g.gcm && g.helper.kind !== 'gh') kids.push(h('div', { class: 'warn-box', text: 'Git Credential Manager was not found. It comes with Git for Windows: reinstall Git from Installers (keep "Git Credential Manager" ticked), then press Check again.' }));
+      if (g.gcm && !['gcm', 'gh'].includes(g.helper.kind)) {
+        kids.push(h('div', { class: 'warn-box' }, `Git is not set to use Git Credential Manager, so GitHub sign-in may not be saved. `,
+          h('button', { class: 'btn btn-sm', text: 'Use Git Credential Manager', title: 'Sets credential.helper to manager in your Git settings', onclick: async () => { const r = await hub.gitauth.useGcm(); if (r && r.ok) { toast('Git now uses Git Credential Manager.', 5000, 'good'); paint(); } else fail(r); } })));
+      }
+      if (g.helper.kind === 'gh') kids.push(h('div', { class: 'dim', text: 'Git uses the GitHub CLI login for github.com. Sign in or out with the GitHub CLI below.' }));
+      if (g.accounts.length) {
+        kids.push(h('div', { class: 'git-accounts' }, g.accounts.map((a) => h('div', { class: 'agent' },
+          h('span', { class: 'dot ok' }),
+          h('div', { class: 'grow' }, h('div', { class: 'agent-name', text: a }), h('div', { class: 'dim', text: 'GitHub account saved in Git Credential Manager' })),
+          h('button', { class: 'btn btn-sm', text: 'Sign out', onclick: async (e) => {
+            if (!(await confirmBox(`Sign ${a} out of Git?`, 'Git forgets this GitHub login. Pushing and pulling private repositories will ask you to sign in again.', 'Sign out'))) return;
+            e.target.disabled = true;
+            const r = await hub.gitauth.logout(a);
+            if (r && r.ok) toast(`${a} is signed out of Git.`, 5000, 'good'); else fail(r);
+            paint();
+          } })))));
+      } else if (g.gcm) {
+        kids.push(h('div', { class: 'dim', text: 'No GitHub account is saved in Git yet.' }));
+      }
+      kids.push(h('div', { class: 'bar wrap' },
+        g.gcm ? h('button', { class: `btn btn-sm${g.accounts.length ? '' : ' btn-primary'}`, text: g.accounts.length ? 'Add another GitHub account' : 'Sign in to GitHub', title: 'Opens Git Credential Manager\'s browser sign-in in a terminal window', onclick: async () => {
+          const r = await hub.gitauth.login();
+          if (r && r.ok) toast('Finish the sign-in in the browser window, then press Check again.', 9000); else fail(r);
+        } }) : null,
+        h('button', { class: 'btn btn-sm', text: 'Check again', onclick: () => { box.replaceChildren(h('div', { class: 'dim', text: 'Checking Git…' })); paint(); if (onChange) onChange(); } }),
+        g.helper.kind !== 'gh' ? h('button', { class: 'btn btn-sm', text: 'Let Git use the GitHub CLI login', title: 'Runs "gh auth setup-git" in a terminal: Git then uses the GitHub CLI login for github.com', onclick: () => hub.gitauth.useGh().then((x) => x && !x.ok && fail(x)) }) : null));
+      box.replaceChildren(...kids);
     };
     paint();
     return box;
@@ -1284,7 +1448,80 @@
     root.style.setProperty('--reading', st.readingFont);
     root.style.setProperty('--mono', st.codeFont);
     S.readmeImages = st.readmeImages;
+    if (st.librarySort && st.librarySort !== S.sort) { S.sort = st.librarySort; const el = document.getElementById('sort'); if (el) el.value = S.sort; if (S.repos.length) paintList(); }
+    applyLayout();
   }
+
+  /* ---------- movable separators ----------
+     Two separators: between the repository list and the main area, and (when
+     Settings is pinned) between the main area and Settings. Drag, or focus one
+     and use the arrow keys; double-click puts it back. Widths are saved in
+     settings (sidebarWidth, dockWidth), and the main area always keeps at
+     least MIN_MAIN pixels, so a narrow window shrinks the side panes for the
+     moment without changing what is saved. */
+  const MIN_MAIN = 380;
+  const drag = { side: null, dock: null };
+  function layoutWidths() {
+    const W = window.innerWidth || 1400;
+    const pinned = document.body.classList.contains('settings-pinned');
+    const st2 = S.settings || {};
+    let dock = pinned ? (drag.dock != null ? drag.dock : (st2.dockWidth || 480)) : 0;
+    let side = drag.side != null ? drag.side : (st2.sidebarWidth || 340);
+    side = Math.max(220, Math.min(side, W - dock - MIN_MAIN));
+    if (pinned) dock = Math.max(320, Math.min(dock, W - side - MIN_MAIN));
+    return { side: Math.max(180, side), dock: Math.max(0, dock) };
+  }
+  function applyLayout() {
+    const lay = document.querySelector('.layout');
+    if (!lay) return;
+    const w = layoutWidths();
+    lay.style.setProperty('--side-w', `${w.side}px`);
+    lay.style.setProperty('--dock-w', `${w.dock}px`);
+  }
+  function wireSplitter(el, which) {
+    if (!el) return;
+    const key = which === 'side' ? 'sidebarWidth' : 'dockWidth';
+    const def = which === 'side' ? 340 : 480;
+    const dir = which === 'side' ? 1 : -1;
+    const save = (w) => { drag[which] = null; setSetting({ [key]: Math.round(w) }); };
+    let start = null;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      start = { x: e.clientX, w: layoutWidths()[which] };
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging'); document.body.classList.add('resizing');
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      drag[which] = start.w + dir * (e.clientX - start.x);
+      applyLayout();
+    });
+    const end = (e) => {
+      if (!start) return;
+      start = null;
+      try { el.releasePointerCapture(e.pointerId); } catch { /* released */ }
+      el.classList.remove('dragging'); document.body.classList.remove('resizing');
+      const w = layoutWidths()[which];
+      save(w);
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('dblclick', () => { drag[which] = null; setSetting({ [key]: def }); });
+    el.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 64 : 16;
+      const cur = layoutWidths()[which];
+      let next = null;
+      if (e.key === 'ArrowLeft') next = cur - dir * step;
+      else if (e.key === 'ArrowRight') next = cur + dir * step;
+      else if (e.key === 'Home') next = def;
+      if (next == null) return;
+      e.preventDefault();
+      drag[which] = next; applyLayout();
+      save(layoutWidths()[which]);
+    });
+  }
+  window.addEventListener('resize', () => applyLayout());
 
   /* ---------- settings panel ---------- */
   let settingsSection = '';
@@ -1295,6 +1532,7 @@
     dock.hidden = false;
     document.body.classList.toggle('settings-pinned', (S.settings || {}).settingsMode === 'pinned');
     document.body.classList.toggle('settings-overlay', (S.settings || {}).settingsMode !== 'pinned');
+    applyLayout();
     renderSettings();
     const q = dock.querySelector('.set-search'); if (q) q.focus();
   }
@@ -1302,6 +1540,7 @@
     if (IS_SETTINGS_WINDOW) { window.close(); return; }
     $('settings-dock').hidden = true;
     document.body.classList.remove('settings-pinned', 'settings-overlay');
+    applyLayout();
   }
   const settingsOpen = () => IS_SETTINGS_WINDOW || !$('settings-dock').hidden;
 
@@ -1413,32 +1652,50 @@
       acct.append(
         row('Git identity', 'Your name and email on commits. Saved in Git\'s own settings.', h('div', { class: 'bar tight wrap' }, name, email,
           h('button', { class: 'btn btn-sm', text: 'Save', onclick: async () => { const r = await hub.tools.setIdentity(name.value, email.value); if (r && r.ok) toast('Git identity saved.', 4000, 'good'); else fail(r); } })), 'git login name email commit'),
-        row('GitHub', 'Raises GitHub\'s limit to 5,000 requests an hour and opens private repositories.', loginSection(), 'github login gh sign in'));
+        row('Git sign-in', 'The GitHub login Git uses to clone, pull and push. Signing in happens in Git Credential Manager\'s browser window; RepoHub never sees your password.', gitSignInSection(), 'git login sign in credential manager gcm github account sign out'),
+        row('Connect RepoHub to GitHub', 'For RepoHub\'s own GitHub requests: 5,000 an hour instead of 60, star history and private repositories.', loginSection(), 'github login gh sign in connect connector token'));
       const agentsEl = h('div', { class: 'agents' }, h('div', { class: 'dim', text: 'Checking which agents are installed…' }));
-      acct.append(row('Coding agents', 'Sign-in happens in each agent\'s own window; RepoHub never sees the password. The status below shows installation; agent account sessions are not verified by RepoHub.', agentsEl, 'agent login chatgpt codex claude gemini copilot openai google'));
+      const provEl = h('div', { class: 'agents' });
+      acct.append(
+        row('AI agents and models', 'Sign-in happens in each agent\'s own window or browser page; RepoHub never sees the password or key. The dot shows whether the agent is installed; RepoHub does not check whether its account is signed in.', agentsEl, 'agent login sign in chatgpt codex claude gemini copilot openai google qwen alibaba kimi moonshot ollama opencode kilo cline factory droid mistral vibe'),
+        row('Model providers without a sign-in program', 'These providers only offer API keys on Windows. RepoHub opens their key page; you paste the key into an agent that supports them, which keeps it.', provEl, 'deepseek perplexity grok xai api key provider'));
+      const paintAgents = (data) => {
+        const agents = data.tools.filter((x) => x.group === 'agent');
+        agentsEl.replaceChildren(...agents.map((t) => h('div', { class: 'agent' },
+          h('span', { class: `dot ${t.version ? 'ok' : 'bad'}` }),
+          h('div', { class: 'grow' },
+            h('div', { class: 'agent-name', text: t.signIn ? t.signIn.label : t.name }),
+            h('div', { class: 'dim', text: t.version ? `${t.name} · ${t.version}` : `${t.name} is not installed` }),
+            t.signIn ? h('div', { class: 'dim', text: t.signIn.hint }) : null,
+            t.note ? h('div', { class: 'dim inst-note', text: t.note }) : null),
+          h('div', { class: 'agent-actions' },
+            t.version && t.signIn ? h('button', { class: 'btn btn-sm', text: 'Sign in', title: `Opens a terminal running: ${t.signIn.command}`, onclick: () => hub.installers.signIn(t.id).then((x) => x && !x.ok && fail(x)) }) : null,
+            t.version && t.signOut ? h('button', { class: 'btn btn-sm btn-ghost', text: 'Sign out', onclick: () => hub.installers.signOut(t.id).then((x) => x && !x.ok && fail(x)) }) : null,
+            !t.version && t.canInstall ? h('button', { class: 'btn btn-sm btn-primary', text: 'Install', title: t.command, onclick: () => runInstall([t.id]) }) : null))));
+        provEl.replaceChildren(...(data.providers || []).map((p) => {
+          const ready = p.via.find((v) => v.installed);
+          return h('div', { class: 'agent' },
+            h('span', { class: 'dot' }),
+            h('div', { class: 'grow' }, h('div', { class: 'agent-name', text: p.name }), h('div', { class: 'dim', text: p.note })),
+            h('div', { class: 'agent-actions' },
+              h('button', { class: 'btn btn-sm', text: 'Get an API key', title: p.keyUrl, onclick: () => hub.installers.providerKey(p.id).then((x) => x && !x.ok && fail(x)) }),
+              ready ? h('button', { class: 'btn btn-sm', text: `Add it in ${ready.name}`, onclick: () => hub.installers.signIn(ready.id).then((x) => x && !x.ok && fail(x)) })
+                : p.via.length ? h('button', { class: 'btn btn-sm btn-primary', text: `Install ${p.via[0].name}`, onclick: () => runInstall([p.via[0].id]) }) : null));
+        }));
+      };
       const data = installState || await hub.installers.check();
       installState = data;
-      const AG = ['claude', 'codex', 'gemini', 'copilot'];
-      agentsEl.replaceChildren(...AG.map((id) => {
-        const t = data.tools.find((x) => x.id === id);
-        if (!t) return null;
-        return h('div', { class: 'agent' },
-          h('span', { class: `dot ${t.version ? 'ok' : 'bad'}` }),
-          h('div', { class: 'grow' }, h('div', { class: 'agent-name', text: t.signIn ? t.signIn.label : t.name }), h('div', { class: 'dim', text: t.version ? `${t.name} · ${t.version}` : `${t.name} is not installed` }), t.signIn ? h('div', { class: 'dim', text: t.signIn.hint }) : null),
-          t.version
-            ? h('button', { class: 'btn btn-sm', text: 'Sign in', onclick: () => hub.installers.signIn(id).then((x) => x && !x.ok && fail(x)) })
-            : h('button', { class: 'btn btn-sm btn-primary', text: 'Install', onclick: () => runInstall([id]) }));
-      }));
+      paintAgents(data);
       filterRows();
     })();
 
     // Installers
-    const inst = sec('installers', 'Installers', h('div', { class: 'set-desc', text: 'Everything the repositories you try may need. Installs run in a visible window with the official installers (winget, built into Windows, or npm). You answer the license and administrator prompts yourself.' }));
+    const inst = sec('installers', 'Installers', h('div', { class: 'set-desc', text: 'Everything the repositories you try may need. Installs run in a visible window with the official installers (winget, built into Windows, npm, or uv for Python tools). You answer the license and administrator prompts yourself.' }));
     body.append(inst);
     const instList = h('div', { class: 'inst-list' }, h('div', { class: 'dim', text: 'Checking what is installed…' }));
     inst.append(instList);
     const paintInstallers = (data) => {
-      const GROUPS = [['runtime', 'Languages and runtimes'], ['package', 'Package managers'], ['container', 'Containers'], ['tool', 'Tools'], ['agent', 'Coding agents']];
+      const GROUPS = [['runtime', 'Languages and runtimes'], ['package', 'Package managers'], ['container', 'Containers'], ['tool', 'Tools'], ['agent', 'AI agents and models']];
       const missing = data.tools.filter((t) => !t.version && t.canInstall);
       instList.replaceChildren(
         data.windows && !data.winget ? h('div', { class: 'warn-box', text: 'winget (Windows Package Manager) was not found. Install "App Installer" from the Microsoft Store, then press Check again.' }) : null,
@@ -1529,6 +1786,7 @@
     ['Ctrl+Shift+C', 'Copy selected text in a log or code view'],
     ['Ctrl+Shift+V', 'Paste into the focused box'],
     ['Right-click', 'In a log or code view: copies the selected text'],
+    ['Drag a separator', 'Resize the repository list or pinned Settings; arrow keys when it has focus, double-click to reset'],
     ['F5', 'Reload the window', 'For page edits (renderer.js, styles.css, index.html). Running jobs and sandboxes keep running.'],
     ['Ctrl+Shift+R', 'Full relaunch', 'Use after editing main.js or preload.js'],
     ['F12', 'Toggle DevTools'],
@@ -1550,6 +1808,15 @@
       ...SECTIONS.map(([id, label]) => [`Settings: ${label}`, '', () => openSettings(id)]),
       ['Install tools', '', () => openSettings('installers')],
       ['Sign in to GitHub', '', () => openSettings('accounts')],
+      ['Sign in to Git (Git Credential Manager)', '', () => openSettings('accounts')],
+      ...SORTS.map(([v, l]) => [`Sort the list: ${l}`, '', () => setSort(v)]),
+      ['Reset the list width', '', () => setSetting({ sidebarWidth: 340 })],
+      ...(() => {
+        const full = S.sel && S.sel.type === 'explore' && S.sel.data ? S.sel.data.fullName
+          : S.sel && S.sel.type === 'repo' ? (webOf(st(S.sel.path)).match(/^https:\/\/github\.com\/([^/]+\/[^/]+)$/i) || [])[1] : '';
+        return full ? [['GitIngest', 'gitingest.com'], ['GitDiagram', 'gitdiagram.com'], ['DeepWiki', 'deepwiki.com'], ['GitMCP', 'gitmcp.io']].map(([n], i) => [`Open ${full} in ${n}`, '', () => hub.aitools.open(['gitingest', 'gitdiagram', 'deepwiki', 'gitmcp'][i], full)]) : [];
+      })(),
+      ['AI agent sign-ins', '', () => openSettings('accounts')],
       ['Switch to day', '', () => setSetting({ themeMode: 'day' })],
       ['Switch to night', '', () => setSetting({ themeMode: 'night' })],
       ['Follow Windows day or night', '', () => setSetting({ themeMode: 'system' })],
@@ -1626,16 +1893,14 @@
   });
 
   /* ---------- repository grid ---------- */
-  function showGrid() { S.sel = { type: 'grid', q: (S.sel && S.sel.type === 'grid' && S.sel.q) || '', sort: (S.sel && S.sel.sort) || 'recent' }; paintList(); paintMain(); }
+  function showGrid() { S.sel = { type: 'grid', q: (S.sel && S.sel.type === 'grid' && S.sel.q) || '', sort: (S.sel && S.sel.type === 'grid' && S.sel.sort) || S.sort || 'recent' }; paintList(); paintMain(); }
   function paintGrid() {
     const V = S.sel;
     const q = (V.q || '').toLowerCase();
-    let rows = S.repos.filter((r) => (!r.hidden || S.showHidden) && (!q || `${r.name} ${r.path} ${(st(r.path) || {}).remote || ''}`.toLowerCase().includes(q)));
-    const att = (r) => { const s2 = st(r.path); return s2 && s2.ok ? (s2.conflicts ? 100 : 0) + (s2.locked ? 50 : 0) + s2.changed + s2.ahead * 2 + s2.behind * 3 : -1; };
-    rows.sort((a, b) => V.sort === 'name' ? a.name.localeCompare(b.name) : V.sort === 'attention' ? att(b) - att(a) : String((st(b.path) || {}).lastDate || '').localeCompare(String((st(a.path) || {}).lastDate || '')));
+    const rows = sortRows(S.repos.filter((r) => (!r.hidden || S.showHidden) && (!q || `${r.name} ${r.path} ${(st(r.path) || {}).remote || ''} ${(catOf(r) || {}).label || ''}`.toLowerCase().includes(q))), V.sort);
     const filter = h('input', { class: 'input grow', type: 'search', placeholder: 'Filter repositories', value: V.q || '' });
     filter.addEventListener('input', () => { V.q = filter.value; const pos = filter.selectionStart; paintGrid(); const f2 = main.querySelector('.grid-tools input'); if (f2) { f2.focus(); f2.setSelectionRange(pos, pos); } });
-    const sort = h('select', { class: 'input', onchange: (e) => { V.sort = e.target.value; paintGrid(); } }, h('option', { value: 'recent', text: 'Most recent' }), h('option', { value: 'attention', text: 'Needs attention first' }), h('option', { value: 'name', text: 'Name' }));
+    const sort = h('select', { class: 'input', title: 'Sort', onchange: (e) => { V.sort = e.target.value; paintGrid(); } }, SORTS.map(([v, l]) => h('option', { value: v, text: l })));
     sort.value = V.sort;
     const card = (r) => {
       const s2 = st(r.path);
@@ -1643,6 +1908,7 @@
       return h('div', { class: `repo-card${r.hidden ? ' hidden-repo' : ''}` },
         h('div', { class: 'rc-top' }, h('button', { class: 'linkish rc-name', text: r.name, title: r.path, onclick: () => openRepo(r.path) }), busy ? h('span', { class: 'spin', text: '⟳' }) : null),
         h('div', { class: 'dim mono rc-sub', text: [ownerOf(s2 && s2.remote), s2 && s2.branch].filter(Boolean).join(' · ') || 'local' }),
+        catOf(r) && V.sort !== 'category' ? h('div', { class: 'row-cat rc-cat', text: catOf(r).label, title: catOf(r).why }) : null,
         h('div', { class: 'rc-chips' }, ...chips(s2, r)),
         h('div', { class: 'dim rc-last', text: s2 && s2.lastMessage ? `${s2.lastDate} · ${s2.lastMessage}` : s2 && s2.noCommits ? 'no commits yet' : '' }),
         h('div', { class: 'rc-actions' },
@@ -1657,7 +1923,11 @@
           h('button', { class: 'btn btn-sm', text: 'Refresh', onclick: () => refreshAll().then(() => S.sel.type === 'grid' && paintGrid()) }),
           h('button', { class: 'btn btn-sm', text: 'Fetch all', onclick: () => fetchAll().then(() => S.sel.type === 'grid' && paintGrid()) }),
           h('button', { class: 'btn btn-sm btn-primary', text: 'Update all', onclick: () => updateAll() }))),
-      rows.length ? h('div', { class: 'repo-grid' }, rows.map(card)) : section('', h('div', { class: 'dim', text: 'No repositories match.' })));
+      !rows.length ? section('', h('div', { class: 'dim', text: 'No repositories match.' }))
+        : V.sort === 'category' ? h('div', { class: 'grid-groups' }, groupByCategory(rows).map((g) => h('section', { class: 'grid-group' },
+          h('div', { class: 'grid-group-head' }, h('span', { text: g.label }), h('span', { class: 'count', text: String(g.rows.length) })),
+          h('div', { class: 'repo-grid' }, g.rows.map(card)))))
+          : h('div', { class: 'repo-grid' }, rows.map(card)));
   }
 
   /* ---------- update all ---------- */
@@ -1785,6 +2055,11 @@
     $('palette-btn').addEventListener('click', openPalette);
     $('grid-btn').addEventListener('click', showGrid);
     $('update-btn').addEventListener('click', updateAll);
+    const sortEl = $('sort');
+    if (sortEl) { sortEl.replaceChildren(...SORTS.map(([v, l, short]) => h('option', { value: v, text: short, title: l }))); sortEl.value = S.sort; sortEl.addEventListener('change', (e) => setSort(e.target.value)); }
+    wireSplitter($('side-split'), 'side');
+    wireSplitter($('dock-split'), 'dock');
+    applyLayout();
     paintMain();
     try { const cfg = await hub.repos.settings(); S.owner = (cfg && cfg.owner) || ''; } catch { /* default */ }
     const running = await hub.job.running().catch(() => null);
@@ -1798,7 +2073,7 @@
     $('auth-chip').addEventListener('click', () => openSettings('accounts'));
     $('sandboxes-btn').addEventListener('click', showSandboxes);
     const c = await hub.repos.cached().catch(() => null);
-    if (c && c.ok && c.repos.length) { S.repos = c.repos; paintList(); await refreshAll(); } else await rescan();
+    if (c && c.ok && c.repos.length) { S.repos = c.repos; paintList(); loadCategories().catch(() => {}); await refreshAll(); } else await rescan();
     const sv = (S.settings || {}).startView;
     if (!S.sel) {
       if (sv === 'grid') showGrid();

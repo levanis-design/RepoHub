@@ -31,6 +31,10 @@ const SCHEMA = {
   // Start
   startView: ['welcome', (v) => ['welcome', 'grid', 'saved', 'last'].includes(v)],
   libraryView: ['list', (v) => ['list', 'grid'].includes(v)],
+  librarySort: ['recent', (v) => ['recent', 'name', 'name-desc', 'attention', 'category'].includes(v)],
+  // Layout: the movable separators
+  sidebarWidth: [340, (v) => Number.isFinite(v) && v >= 220 && v <= 900],
+  dockWidth: [480, (v) => Number.isFinite(v) && v >= 360 && v <= 1000],
   // Security
   sandboxMemoryGb: [2, (v) => Number.isFinite(v) && v >= 1 && v <= 16],
   sandboxCpus: [2, (v) => Number.isFinite(v) && v >= 1 && v <= 8],

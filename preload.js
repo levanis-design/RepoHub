@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('hub', {
     addFolder: (dir) => call('repos:addFolder', { dir }),
     clone: (url, parent) => call('repos:clone', { url, parent }),
     runOptions: (dir) => call('repos:runOptions', { dir }),
+    categories: (dirs) => call('repos:categories', { dirs }),
+    setCategory: (dir, id) => call('repos:setCategory', { dir, id }),
   },
   gh: {
     preview: (link) => call('gh:preview', { link }),
@@ -63,10 +65,23 @@ contextBridge.exposeInMainWorld('hub', {
   },
   auth: {
     status: () => call('auth:status'),
-    signIn: () => call('auth:signIn'),
+    signIn: (source) => call('auth:signIn', { source }),
     signOut: () => call('auth:signOut'),
     openCliLogin: () => call('auth:openCliLogin'),
     onChanged: (cb) => ipcRenderer.on('auth:changed', (_e, msg) => cb(msg)),
+  },
+  gitauth: {
+    status: () => call('gitauth:status'),
+    login: () => call('gitauth:login'),
+    logout: (account) => call('gitauth:logout', { account }),
+    useGcm: () => call('gitauth:useGcm'),
+    useGh: () => call('gitauth:useGh'),
+  },
+  aitools: {
+    links: (full) => call('aitools:links', { full }),
+    open: (service, full) => call('aitools:open', { service, full }),
+    mcpCommand: (full) => call('aitools:mcpCommand', { full }),
+    addMcp: (full) => call('aitools:addMcp', { full }),
   },
   insights: { get: (link, force) => call('insights:get', { link, force }) },
   files: {
@@ -102,6 +117,8 @@ contextBridge.exposeInMainWorld('hub', {
     check: () => call('installers:check'),
     install: (ids) => call('installers:install', { ids }),
     signIn: (id) => call('installers:signIn', { id }),
+    signOut: (id) => call('installers:signOut', { id }),
+    providerKey: (id) => call('installers:providerKey', { id }),
   },
   appControl: {
     reload: () => call('app:reload'),

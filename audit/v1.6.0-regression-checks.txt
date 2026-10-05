@@ -1,0 +1,26 @@
+✔ JSONC preserves commas and braces inside strings (5.8282ms)
+✔ JSONC block comments separate tokens rather than merging them (0.3345ms)
+✔ sandbox removal requires the ownership label as well as the prefix (2.3282ms)
+✔ sandbox attachment requires ownership before reading container logs (1.3282ms)
+✔ installer preview reports pnpm method matching its command (3.3725ms)
+✔ installer script refreshes PATH after installing Node and resets exit status per step (3.3783ms)
+✔ Update all explains divergent history and never pulls it (1.634ms)
+✔ Update all reports failed status checks and missing remotes (0.1477ms)
+✔ Update all protects uncommitted files even if already current (0.1158ms)
+✔ sandbox array postCreateCommand uses argument quoting (0.6213ms)
+✔ SSH remotes with embedded passwords are refused (0.4203ms)
+✔ Windows git executable cannot be replaced by a file in a repository (1076.9999ms)
+✔ local file reads refuse directory junctions leading outside the repository (8.9808ms)
+✔ terminal launch reports asynchronous process errors (2.1277ms)
+✔ terminal paths travel as environment values rather than PowerShell code (1.6245ms)
+✔ Docker missing and Docker stopped remain distinct (2.1239ms)
+✔ sandbox launch enforces resources and loopback ports without host mounts (45.0818ms)
+✔ settings rejects numeric font names and survives a non-object settings file (13.1439ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1275.7049
