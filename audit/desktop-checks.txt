@@ -1,0 +1,21 @@
+
+> repohub@1.4.0 check:desktop
+> node scripts/test/desktop-smoke.js
+
+PASS actual Electron preload and version
+PASS Indigo default
+PASS floating Settings
+PASS settings search finds code font
+PASS settings search empty results hides every section
+PASS pinned Settings has readable width
+PASS day and night settings update the renderer
+PASS README strips script and event handlers
+PASS README image privacy setting prevents all image elements
+PASS installer detection lists all 17 catalog entries
+PASS preview rejects an unrelated local service
+PASS settings popout is a second actual Electron window
+PASS reload preserves saved settings
+PASS command palette opens with Ctrl+K
+PASS grid opens with Ctrl+G
+PASS pinned Settings and 125% scale keep the grid toolbar inside its pane
+Desktop checks: 16 passed

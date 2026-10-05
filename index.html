@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- No inline scripts, no remote scripts. README images may load from https.
+       Frames may only show a sandbox's own local address (the Live Demo preview). -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'none'; object-src 'none'; frame-src http://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+  <title>RepoHub</title>
+  <link rel="stylesheet" href="node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">R</span> RepoHub</div>
+    <form id="explore-form" class="explore">
+      <input id="explore-input" type="text" spellcheck="false" autocomplete="off"
+             placeholder="Paste a GitHub link to see what it is, for example https://github.com/owner/repository">
+      <button type="submit" class="btn btn-primary">Explore</button>
+    </form>
+    <button id="palette-btn" class="btn btn-ghost" title="Command palette: every action, searchable (Ctrl+K)">Actions <kbd>Ctrl K</kbd></button>
+    <button id="auth-chip" class="chip" title="GitHub login">GitHub: signed out</button>
+    <button id="settings-btn" class="btn" title="Settings (Ctrl+,)">⚙ Settings</button>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="side-head">
+        <div class="side-title">On this computer <span id="lib-count" class="dim"></span></div>
+        <div class="side-actions">
+          <button id="grid-btn" class="btn btn-sm" title="All repositories as a grid (Ctrl+G)">Grid</button>
+          <button id="refresh-btn" class="btn btn-sm" title="Read every repository again (no network)">Refresh</button>
+          <button id="fetch-btn" class="btn btn-sm" title="Ask GitHub what is new for every repository (Ctrl+Shift+F)">Fetch all</button>
+          <button id="update-btn" class="btn btn-sm" title="Pull every clean repository that is behind GitHub (Ctrl+Shift+U)">Update all</button>
+          <button id="more-btn" class="btn btn-sm" title="Rescan, add a folder, hidden repositories">More</button>
+          <button id="sandboxes-btn" class="btn btn-sm" title="Repositories running in Docker sandboxes">Sandboxes <span id="sb-count" class="count"></span></button>
+        </div>
+        <div class="side-actions">
+          <button id="saved-btn" class="btn btn-sm" title="Saved repositories, collections and recently viewed">Saved <span id="saved-count" class="count"></span></button>
+          <button id="compare-btn" class="btn btn-sm" title="Compare up to four repositories">Compare <span id="compare-count" class="count"></span></button>
+        </div>
+        <div id="more-menu" class="menu" hidden>
+          <button data-act="rescan">Rescan folders for repositories</button>
+          <button data-act="add">Add a repository folder</button>
+          <label><input type="checkbox" id="show-hidden"> Show hidden repositories</label>
+        </div>
+        <div class="side-filters">
+          <input id="filter" type="search" placeholder="Filter">
+          <select id="view">
+            <option value="all">All</option>
+            <option value="attention">Needs attention</option>
+            <option value="mine">Mine</option>
+            <option value="others">Others</option>
+          </select>
+        </div>
+      </div>
+      <div id="summary-tiles" class="tiles"></div>
+      <div id="repo-list" class="repo-list"></div>
+    </aside>
+
+    <main id="main" class="main"></main>
+    <aside id="settings-dock" class="settings-dock" hidden></aside>
+  </div>
+
+  <div id="overlay" class="overlay" hidden></div>
+  <div id="palette" class="palette-host" hidden></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script src="node_modules/marked/lib/marked.umd.js"></script>
+  <script src="node_modules/@highlightjs/cdn-assets/highlight.min.js"></script>
+  <script src="charts.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

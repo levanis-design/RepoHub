@@ -1,0 +1,30 @@
+
+> repohub@1.4.0 check:regression
+> node --test tests/regression.test.js
+
+✔ JSONC preserves commas and braces inside strings (4.5276ms)
+✔ JSONC block comments separate tokens rather than merging them (0.1454ms)
+✔ sandbox removal requires the ownership label as well as the prefix (1.728ms)
+✔ sandbox attachment requires ownership before reading container logs (0.9814ms)
+✔ installer preview reports pnpm method matching its command (1.94ms)
+✔ installer script refreshes PATH after installing Node and resets exit status per step (2.7868ms)
+✔ Update all explains divergent history and never pulls it (1.13ms)
+✔ Update all reports failed status checks and missing remotes (0.1729ms)
+✔ Update all protects uncommitted files even if already current (0.1069ms)
+✔ sandbox array postCreateCommand uses argument quoting (0.5694ms)
+✔ SSH remotes with embedded passwords are refused (0.356ms)
+✔ Windows git executable cannot be replaced by a file in a repository (1511.2458ms)
+✔ local file reads refuse directory junctions leading outside the repository (7.6899ms)
+✔ terminal launch reports asynchronous process errors (1.5365ms)
+✔ terminal paths travel as environment values rather than PowerShell code (1.1422ms)
+✔ Docker missing and Docker stopped remain distinct (1.5884ms)
+✔ sandbox launch enforces resources and loopback ports without host mounts (37.7733ms)
+✔ settings rejects numeric font names and survives a non-object settings file (9.5088ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1664.7618

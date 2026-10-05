@@ -1,0 +1,77 @@
+{
+  "checkedOn": "2026-10-04",
+  "winget": [
+    {
+      "id": "git",
+      "packageId": "Git.Git",
+      "manifestVersion": "2.55.0.5",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/g/Git/Git/2.55.0.5/Git.Git.yaml"
+    },
+    {
+      "id": "node",
+      "packageId": "OpenJS.NodeJS.LTS",
+      "manifestVersion": "24.19.0",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/o/OpenJS/NodeJS/LTS/24.19.0/OpenJS.NodeJS.LTS.yaml"
+    },
+    {
+      "id": "pnpm",
+      "packageId": "pnpm.pnpm",
+      "manifestVersion": "12.8.1",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/p/pnpm/pnpm/12.8.1/pnpm.pnpm.yaml"
+    },
+    {
+      "id": "python",
+      "packageId": "Python.Python.3.13",
+      "manifestVersion": "3.13.15",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/p/Python/Python/3/13/3.13.15/Python.Python.3.13.yaml"
+    },
+    {
+      "id": "uv",
+      "packageId": "astral-sh.uv",
+      "manifestVersion": "0.12.23",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/a/astral-sh/uv/0.12.23/astral-sh.uv.yaml"
+    },
+    {
+      "id": "docker",
+      "packageId": "Docker.DockerDesktop",
+      "manifestVersion": "4.93.0",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/d/Docker/DockerDesktop/4.93.0/Docker.DockerDesktop.yaml"
+    },
+    {
+      "id": "cargo",
+      "packageId": "Rustlang.Rustup",
+      "manifestVersion": "1.29.1",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/r/Rustlang/Rustup/1.29.1/Rustlang.Rustup.yaml"
+    },
+    {
+      "id": "go",
+      "packageId": "GoLang.Go",
+      "manifestVersion": "1.27.0",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/g/GoLang/Go/1.27.0/GoLang.Go.yaml"
+    },
+    {
+      "id": "gh",
+      "packageId": "GitHub.cli",
+      "manifestVersion": "2.102.0",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/g/GitHub/cli/2.102.0/GitHub.cli.yaml"
+    },
+    {
+      "id": "code",
+      "packageId": "Microsoft.VisualStudioCode",
+      "manifestVersion": "1.140.0",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/m/Microsoft/VisualStudioCode/1.140.0/Microsoft.VisualStudioCode.yaml"
+    },
+    {
+      "id": "wt",
+      "packageId": "Microsoft.WindowsTerminal",
+      "manifestVersion": "1.25.2733.0",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/m/Microsoft/WindowsTerminal/1.25.2733.0/Microsoft.WindowsTerminal.yaml"
+    },
+    {
+      "id": "claude",
+      "packageId": "Anthropic.ClaudeCode",
+      "manifestVersion": "2.1.286",
+      "source": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/a/Anthropic/ClaudeCode/2.1.286/Anthropic.ClaudeCode.yaml"
+    }
+  ]
+}

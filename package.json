@@ -1,0 +1,78 @@
+{
+  "name": "repohub",
+  "productName": "RepoHub",
+  "version": "1.4.0",
+  "description": "RepoHub — see what a GitHub repository is before installing it, install it in two steps, and keep every repository on this computer committed, synced and runnable.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "check": "node dev/check-engine.js",
+    "dist": "electron-builder --win",
+    "pack": "electron-builder --win --dir",
+    "check:regression": "node --test tests/regression.test.js",
+    "check:syntax": "node scripts/check/syntax.js",
+    "check:desktop": "node scripts/test/desktop-smoke.js"
+  },
+  "author": {
+    "name": "Levani Sidiani",
+    "url": "https://github.com/levanis-design"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@highlightjs/cdn-assets": "^11.12.0",
+    "marked": "^14.1.4"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "build": {
+    "appId": "com.levani.repohub",
+    "productName": "RepoHub",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "*.js",
+      "index.html",
+      "styles.css",
+      "icon.ico",
+      "icon.png",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "icon": "icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "RepoHub-Setup-${version}.${ext}",
+      "shortcutName": "RepoHub",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "RepoHub-${version}-portable.${ext}"
+    }
+  }
+}
