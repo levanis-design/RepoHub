@@ -1,4 +1,4 @@
-![RepoHub screenshot](Repohub.jpg)
+![RepoHub screenshot](RepoHub.jpg)
 # RepoHub
 
 **See what a GitHub repository is before you install it, install it in two steps, and keep every repository on this computer committed, synced and runnable.**
