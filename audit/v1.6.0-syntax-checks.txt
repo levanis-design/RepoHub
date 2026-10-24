@@ -1,0 +1,1 @@
+PASS syntax: 25 JavaScript files
