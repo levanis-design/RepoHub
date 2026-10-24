@@ -11,7 +11,7 @@ const packedPackage = JSON.parse(asar.extractFile(archive, 'package.json'));
 for (const key of ['name', 'version', 'main', 'dependencies', 'engines']) assert.deepEqual(packedPackage[key], sourcePackage[key], key);
 const entries = asar.listPackage(archive);
 assert(!entries.some(f => /^\/(dev|tests|scripts|audit)\//.test(f)));
-const artifacts = ['RepoHub-Setup-1.4.0.exe', 'RepoHub-1.4.0-portable.exe'].map(file => {
+const artifacts = [`RepoHub-Setup-${sourcePackage.version}.exe`, `RepoHub-${sourcePackage.version}-portable.exe`].map(file => {
   const bytes = fs.readFileSync('release/' + file);
   return { file, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 });

@@ -179,7 +179,14 @@ function registerIpc() {
   handle('repos:diff', ({ dir, file }) => repos.diff(dir, file));
   handle('repos:fetch', ({ dir }) => repos.fetch(dir));
   handle('repos:pull', ({ dir }) => repos.pull(dir));
-  handle('repos:updateOne', ({ dir }) => repos.updateOne(dir));
+  handle('repos:updateOne', ({ dir, setAside }) => repos.updateOne(dir, { setAsideChanges: !!setAside }));
+  handle('repos:changes', ({ dir }) => repos.changes(dir));
+  handle('repos:setAside', ({ dir, label }) => repos.setAside(dir, label));
+  handle('repos:asideList', ({ dir }) => repos.setAsideList(dir));
+  handle('repos:bringBack', ({ dir, ref }) => repos.bringBack(dir, ref));
+  handle('repos:dropAside', ({ dir, ref }) => repos.dropAside(dir, ref));
+  handle('repos:asideAndPull', ({ dir }) => repos.asideAndPull(dir));
+  handle('repos:matchRemote', ({ dir }) => repos.matchRemote(dir));
   handle('repos:commit', ({ dir, message }) => repos.commit(dir, message));
   handle('repos:push', ({ dir }) => repos.push(dir));
   handle('repos:sync', ({ dir, message }) => repos.syncRepo(dir, message));

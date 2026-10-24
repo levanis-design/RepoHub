@@ -534,3 +534,10 @@ body.resizing iframe { pointer-events: none; }
 .linkish-topic { cursor: pointer; border: 0; }
 .bar.center { justify-content: center; }
 .disc-row .saved-actions { flex-wrap: nowrap; flex: 0 0 auto; }
+
+/* ---------- 1.9.0: blocked updates ---------- */
+.info-box { background: var(--accent-tint); border: 1px solid var(--accent-line); border-radius: var(--r-md); padding: 10px 12px; line-height: 1.5; }
+.changes-kinds { margin: 2px 0 8px; padding-left: 18px; line-height: 1.6; }
+.changes-help .bar { margin-top: 8px; }
+.aside-list { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.aside-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }

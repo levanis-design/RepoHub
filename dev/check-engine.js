@@ -30,7 +30,7 @@ const discover = require('../discover');
 
 let failed = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${msg}`); if (!cond) failed += 1; };
-const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t.t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t.t' } }).toString();
+const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: 'pipe', env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t.t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t.t' } }).toString();
 const w = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, s); };
 
 (async () => {
@@ -104,11 +104,14 @@ const w = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.wri
     // Bulk updates on disposable repositories only.
     ok((await R.updateOne(B)).state === 'skipped', 'Update all explains a missing remote');
     sh('git pull -q && echo update > bulk.txt && git add . && git commit -qm bulk && git push -q', O);
-    w(path.join(A, 'keep.txt'), 'uncommitted work');
+    const pkgBefore = fs.readFileSync(path.join(A, 'package.json'), 'utf8');
+    w(path.join(A, 'package.json'), pkgBefore + '\n');
     const dirtyUpdate = await R.updateOne(A);
-    ok(dirtyUpdate.state === 'skipped' && /uncommitted/.test(dirtyUpdate.note) && fs.readFileSync(path.join(A, 'keep.txt'), 'utf8') === 'uncommitted work', 'Update all fetches and preserves dirty files');
+    ok(dirtyUpdate.state === 'skipped' && /uncommitted/.test(dirtyUpdate.note) && fs.readFileSync(path.join(A, 'package.json'), 'utf8') === pkgBefore + '\n', 'Update all fetches and preserves edited tracked files');
+    w(path.join(A, 'package.json'), pkgBefore);
+    w(path.join(A, 'keep.txt'), 'uncommitted work');
+    ok((await R.updateOne(A)).state === 'updated' && fs.existsSync(path.join(A, 'bulk.txt')) && fs.readFileSync(path.join(A, 'keep.txt'), 'utf8') === 'uncommitted work', 'Update all fast-forwards; a new untracked file does not block it and stays');
     fs.unlinkSync(path.join(A, 'keep.txt'));
-    ok((await R.updateOne(A)).state === 'updated' && fs.existsSync(path.join(A, 'bulk.txt')), 'Update all fast-forwards a clean behind repository');
     ok((await R.updateOne(A)).state === 'current', 'Update all reports an already current repository');
     w(path.join(A, 'local-only.txt'), 'local'); sh('git add . && git commit -qm local-only', A);
     sh('echo remote > remote-only.txt && git add . && git commit -qm remote-only && git push -q', O);
@@ -350,6 +353,80 @@ const w = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.wri
     const p99 = await discover.search({ language: 'Rust' }, 999);
     ok(!p99.ok || p99.page <= 34, 'page number kept within GitHub\'s 1,000 results');
     github2.doFetch = realFetch;
+
+    // ---------- v1.9: blocked updates ----------
+    sh('git init -q --bare -b main remote2.git', T);
+    sh('git clone -q remote2.git gamma', T);
+    const G = path.join(T, 'gamma');
+    sh('git config user.name t && git config user.email t@t.t && git config core.autocrlf false', G);
+    w(path.join(G, 'README.md'), 'one\ntwo\nthree\n'); w(path.join(G, 'package-lock.json'), '{"a":1}\n'); w(path.join(G, 'app.js'), 'x = 1\n'); w(path.join(G, '.gitignore'), 'node_modules\n');
+    sh('git add . && git commit -qm init && git push -q -u origin main', G);
+    ok(R.addExtra(G).ok, 'test repository added');
+    sh('git clone -q remote2.git gamma-other', T);
+    const G2 = path.join(T, 'gamma-other');
+    sh('git config user.name t && git config user.email t@t.t && echo news > news.txt && git add . && git commit -qm news && git push -q', G2);
+    // the three kinds of change an install or Windows makes, plus a real edit and a .env
+    w(path.join(G, 'README.md'), 'one\r\ntwo\r\nthree\r\n');
+    w(path.join(G, 'package-lock.json'), '{"a":2}\n');
+    w(path.join(G, 'postcss.config.mjs'), 'export default {}\n');
+    w(path.join(G, '.env'), 'SECRET=keep-me\n');
+    const ch = await R.changes(G);
+    ok(ch.ok && ch.lineEndingsOnly.join() === 'README.md' && ch.lockfiles.join() === 'package-lock.json' && ch.untracked.includes('postcss.config.mjs') && ch.other.length === 0, `changes classified: ${JSON.stringify({ eol: ch.lineEndingsOnly, lock: ch.lockfiles, new: ch.untracked, other: ch.other })}`);
+    w(path.join(G, 'app.js'), 'x = 9\n');
+    sh('git add app.js', G);
+    const stagedChanges = await R.changes(G);
+    ok(stagedChanges.other.includes('app.js') && !stagedChanges.lineEndingsOnly.includes('app.js'), 'staged content edits are never described as line-ending-only');
+    sh('git reset -q HEAD -- app.js && git checkout -- app.js', G);
+    w(path.join(G, 'backend', '.env'), 'NESTED_SECRET=keep-local\n');
+    const blocked = await R.pull(G);
+    ok(!blocked.ok && /uncommitted changes/.test(blocked.error), 'plain pull still refuses over uncommitted changes');
+    const ap = await R.asideAndPull(G);
+    ok(ap.ok && fs.existsSync(path.join(G, 'news.txt')), `set aside and update pulled the new commit (${(ap.steps || []).join(' / ') || ap.error})`);
+    ok(fs.readFileSync(path.join(G, '.env'), 'utf8') === 'SECRET=keep-me\n', '.env stays in place when changes are set aside');
+    ok(fs.readFileSync(path.join(G, 'backend', '.env'), 'utf8') === 'NESTED_SECRET=keep-local\n', 'nested .env stays in place when changes are set aside');
+    ok(!fs.existsSync(path.join(G, 'postcss.config.mjs')) && fs.readFileSync(path.join(G, 'package-lock.json'), 'utf8') === '{"a":1}\n', 'set-aside files leave the folder');
+    const list = await R.setAsideList(G);
+    ok(list.ok && list.items.length === 1 && /RepoHub: before updating/.test(list.items[0].message) && list.items[0].ref === 'stash@{0}', 'set-aside entry listed');
+    w(path.join(G, 'app.js'), 'x = 2\n');
+    ok(!(await R.bringBack(G, 'stash@{0}')).ok && fs.readFileSync(path.join(G, 'app.js'), 'utf8') === 'x = 2\n', 'bring back refuses while new edits are present');
+    sh('git checkout -- app.js', G);
+    const bb = await R.bringBack(G, 'stash@{0}');
+    ok(bb.ok && fs.readFileSync(path.join(G, 'package-lock.json'), 'utf8') === '{"a":2}\n' && fs.existsSync(path.join(G, 'postcss.config.mjs')) && (await R.setAsideList(G)).items.length === 0, 'bring back restores everything and removes the entry');
+    ok(!(await R.bringBack(G, 'HEAD~1; rm -rf /')).ok && !(await R.dropAside(G, '--all')).ok, 'only stash@{n} references accepted');
+    // Update all with the option
+    sh('echo more > more.txt && git add . && git commit -qm more && git push -q', G2);
+    const u1 = await R.updateOne(G);
+    ok(u1.state === 'skipped' && /uncommitted/.test(u1.note), 'Update all still skips by default');
+    const u2 = await R.updateOne(G, { setAsideChanges: true });
+    ok(u2.state === 'updated' && /set aside/.test(u2.note) && fs.existsSync(path.join(G, 'more.txt')), `Update all with set aside updates (${u2.note})`);
+    // Local commits on someone else's project
+    sh('git stash drop -q', G);
+    w(path.join(G, 'mine.txt'), 'mine'); sh('git add mine.txt && git commit -qm "Update from Levani"', G);
+    sh('echo theirs > theirs.txt && git add . && git commit -qm theirs && git push -q', G2);
+    w(path.join(G, 'theirs.txt'), 'local untracked data\n');
+    const refusedMatch = await R.matchRemote(G);
+    ok(!refusedMatch.ok && fs.readFileSync(path.join(G, 'theirs.txt'), 'utf8') === 'local untracked data\n' && fs.existsSync(path.join(G, 'mine.txt')), 'match GitHub refuses to overwrite an untracked file and preserves local commits');
+    fs.unlinkSync(path.join(G, 'theirs.txt'));
+    const mr = await R.matchRemote(G);
+    const branches = sh('git branch --list "repohub/backup-*"', G);
+    ok(mr.ok && /repohub\/backup-\d{8}-\d{4}/.test(mr.backup) && branches.includes(mr.backup) && fs.existsSync(path.join(G, 'theirs.txt')) && !fs.existsSync(path.join(G, 'mine.txt')), `match GitHub keeps commits on ${mr.backup}`);
+    ok(sh(`git log --format=%s -1 ${mr.backup}`, G).trim() === 'Update from Levani', 'backup branch holds the local commit');
+    sh('echo latest > latest.txt && git add . && git commit -qm latest && git push -q', G2);
+    const behindMatch = await R.matchRemote(G);
+    ok(behindMatch.ok && fs.existsSync(path.join(G, 'latest.txt')), 'match GitHub updates a behind-only branch instead of claiming it already matches');
+    w(path.join(G, 'app.js'), 'x = 10\n');
+    await R.setAside(G, 'conflict recovery test');
+    w(path.join(G2, 'app.js'), 'x = 20\n');
+    sh('git add app.js && git commit -qm conflict && git push -q', G2);
+    await R.pull(G);
+    const restoreConflict = await R.bringBack(G, 'stash@{0}');
+    ok(!restoreConflict.ok && restoreConflict.conflicts && (await R.setAsideList(G)).items.length === 1 && fs.readFileSync(path.join(G, 'app.js'), 'utf8').includes('<<<<<<<'), 'conflicting restore preserves the set-aside copy and reports conflict markers');
+    // Push errors explained
+    const tooling2 = require('../tooling');
+    const den = tooling2.explain({ code: 128, out: '', err: 'remote: Permission to calesthio/OpenMontage.git denied to levanis-design.\nfatal: unable to access \'https://github.com/calesthio/OpenMontage.git/\': The requested URL returned error: 403' });
+    ok(den.noPermission && den.account === 'levanis-design' && /cannot push to calesthio\/OpenMontage/.test(den.error) && !den.needsLogin, 'push to someone else\'s repository: says why, not "sign in"');
+    const lg = tooling2.explain({ code: 128, out: '', err: 'fatal: could not read Username for \'https://github.com\': terminal prompts disabled' });
+    ok(lg.needsLogin && /Settings → Accounts/.test(lg.error), 'missing login points to Git sign-in');
   } catch (e) {
     failed += 1;
     console.log('FAIL unexpected error:', e && e.stack || e);

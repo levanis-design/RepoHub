@@ -215,6 +215,7 @@ async function status(dir) {
     ahead, behind,
     files: files.slice(0, 500),
     changed: files.length,
+    changedTracked: files.filter((f) => f.kind !== 'new').length,
     conflicts: files.filter((f) => f.kind === 'conflict').length,
     lastDate: lastDate || '',
     lastMessage: lastMsg.join('\t'),
@@ -309,8 +310,9 @@ function pullFailure(r) {
 
 async function pull(dir) {
   const bad = guard(dir); if (bad) return bad;
-  const dirty = await git(['status', '--porcelain'], { cwd: dir });
-  if (dirty.code === 0 && dirty.out) return { ok: false, error: 'There are uncommitted changes. Commit them first, or use Sync, which commits before it pulls.' };
+  // Only changes to files Git tracks block a pull; new untracked files (a .env, build output) do not.
+  const dirty = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: dir });
+  if (dirty.code === 0 && dirty.out) return { ok: false, error: 'There are uncommitted changes. Commit them first, use Sync, or set them aside and update.' };
   const { r, pulled } = await pullRebase(dir);
   if (r.code !== 0) { await git(['rebase', '--abort'], { cwd: dir }); return { ok: false, ...pullFailure(r) }; }
   return { ok: true, steps: [pulled ? 'Pulled the latest from GitHub' : 'Already up to date'] };
@@ -324,27 +326,37 @@ function updateDecision(s) {
   if (s.conflicts) return { state: 'skipped', note: 'Has conflicts.' };
   if (s.branch === 'HEAD') return { state: 'skipped', note: 'Detached HEAD: choose a branch first.' };
   if (!s.upstream) return { state: 'skipped', note: 'Branch has no upstream.' };
-  if (s.changed) return { state: 'skipped', note: `${s.changed} uncommitted change(s): commit or Sync first.` };
+  const tracked = s.changedTracked != null ? s.changedTracked : s.changed;
+  if (tracked) return { state: 'skipped', note: `${tracked} uncommitted change(s): commit, Sync, or set aside first.` };
   if (s.ahead && s.behind) return { state: 'skipped', note: `Diverged: ${s.ahead} local and ${s.behind} remote commits. Resolve this first.` };
   if (!s.behind) return { state: 'current', note: s.ahead ? `Up to date (${s.ahead} local commits to push).` : 'Up to date.' };
   return { state: 'eligible', note: `${s.behind} remote commits to pull.` };
 }
 
-async function updateOne(dir) {
+async function updateOne(dir, { setAsideChanges = false } = {}) {
   const bad = guard(dir); if (bad) return { ...bad, state: 'skipped', note: bad.error };
   const remote = await git(R(['remote', 'get-url', 'origin']), { cwd: dir });
   if (remote.code !== 0 || !remote.out) return { ok: true, state: 'skipped', note: 'No remote address (origin).' };
   const f = await fetch(dir);
   if (!f.ok) return { ...f, state: 'failed', note: f.error };
-  const s = await status(dir);
+  let s = await status(dir);
+  let asideNote = '';
+  // Optional: set uncommitted changes aside (recoverable) so the update can go ahead.
+  if (setAsideChanges && s && s.ok && s.changedTracked && !s.conflicts && !s.locked) {
+    const a = await setAside(dir, 'before Update all');
+    if (!a.ok) return { ok: false, state: 'failed', note: a.error };
+    asideNote = ` ${s.changed} uncommitted change(s) set aside (Bring back is on the Git tab).`;
+    s = await status(dir);
+  }
   const decision = updateDecision(s);
+  if (asideNote) decision.note += asideNote;
   if (decision.state !== 'eligible') return { ok: decision.state !== 'failed', ...decision };
   // Recheck immediately before the mutation and override any autostash configuration.
-  const dirty = await git(R(['status', '--porcelain']), { cwd: dir });
+  const dirty = await git(R(['status', '--porcelain', '--untracked-files=no']), { cwd: dir });
   if (dirty.code !== 0) return { ok: false, state: 'failed', note: firstLine(dirty) };
   if (dirty.out) return { ok: true, state: 'skipped', note: 'Uncommitted work appeared during the update.' };
   const r = await git(['-c', 'merge.autostash=false', '-c', 'rebase.autostash=false', 'pull', '--ff-only', '--no-rebase'], { cwd: dir, timeout: 180000 });
-  return r.code === 0 ? { ok: true, state: 'updated', note: `Pulled ${s.behind} remote commit(s).` }
+  return r.code === 0 ? { ok: true, state: 'updated', note: `Pulled ${s.behind} remote commit(s).${asideNote}` }
     : { ok: false, state: 'failed', note: explain(r, 'Fast-forward pull failed.').error };
 }
 
@@ -376,9 +388,10 @@ async function push(dir) {
   const branch = await currentBranch(dir);
   if (!branch) return { ok: false, error: 'Not on a branch (detached HEAD). Check out a branch first.' };
   const up = await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { cwd: dir });
+  // Interactive: if GitHub asks for a login, Git Credential Manager opens its own sign-in window.
   const r = up.code === 0
-    ? await git(['push'], { cwd: dir, timeout: 180000 })
-    : await git(['push', '-u', 'origin', branch], { cwd: dir, timeout: 180000 });
+    ? await git(['push'], { cwd: dir, timeout: 300000, interactive: true })
+    : await git(['push', '-u', 'origin', branch], { cwd: dir, timeout: 300000, interactive: true });
   if (r.code !== 0) {
     if (/rejected|fetch first|non-fast-forward/i.test(`${r.err}${r.out}`)) return { ok: false, error: 'GitHub has newer commits. Pull first (or use Sync), then push.' };
     return { ok: false, ...explain(r, 'Push failed') };
@@ -403,6 +416,125 @@ async function syncRepo(dir, message) {
   if (!p.ok) return { ...p, steps };
   if (!p.already) steps.push(...p.steps);
   return { ok: true, steps: steps.length ? steps : ['Already in sync'] };
+}
+
+/* ---------- changes you did not mean to keep ---------- */
+
+const LOCKFILES = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|uv\.lock|poetry\.lock|Pipfile\.lock|Cargo\.lock|composer\.lock|Gemfile\.lock|go\.sum)$/i;
+// Files a person adds on purpose and that "set aside" must leave in place.
+const KEEP_PATHS = ['.env', '.env.local', '.env.development', '.env.production', '.env.development.local', '.env.production.local'];
+
+/* What the uncommitted changes are: line-ending-only rewrites (Windows CRLF
+   versus LF), lock files rewritten by an install, new files, and the rest. */
+async function changes(dir) {
+  const bad = guard(dir); if (bad && !bad.locked) return bad;
+  const st = await git(R(['status', '--porcelain=v1', '-uall']), { cwd: dir, timeout: 60000 });
+  if (st.code !== 0) return { ok: false, error: firstLine(st, 'Could not read the changes.') };
+  const files = parsePorcelain(st.out);
+  const tracked = files.filter((f) => f.kind !== 'new');
+  let eolOnly = [];
+  if (tracked.length) {
+    const checked = tracked.slice(0, 400);
+    const diffArgs = ['-c', 'core.quotepath=false', 'diff', '--ignore-cr-at-eol', '--numstat'];
+    const paths = ['--', ...checked.map((f) => f.file)];
+    const ns = await git(R([...diffArgs, ...paths]), { cwd: dir, timeout: 60000 });
+    const staged = await git(R([...diffArgs, '--cached', ...paths]), { cwd: dir, timeout: 60000 });
+    if (ns.code === 0 && staged.code === 0) {
+      const real = new Set(`${ns.out}\n${staged.out}`.split('\n').filter(Boolean).map((l) => l.split('\t')).filter(([a, b]) => a !== '0' || b !== '0').map((p) => p.slice(2).join('\t')));
+      eolOnly = checked.filter((f) => f.kind === 'changed' && !real.has(f.file)).map((f) => f.file);
+    }
+  }
+  const eol = new Set(eolOnly);
+  const lock = files.filter((f) => !eol.has(f.file) && LOCKFILES.test(f.file)).map((f) => f.file);
+  const untracked = files.filter((f) => f.kind === 'new').map((f) => f.file);
+  const other = files.filter((f) => !eol.has(f.file) && !LOCKFILES.test(f.file) && f.kind !== 'new').map((f) => f.file);
+  const asideList = await setAsideList(dir);
+  return { ok: true, total: files.length, lineEndingsOnly: eolOnly, lockfiles: lock, untracked, other, aside: asideList.items || [] };
+}
+
+/* Set changes aside: a Git stash that includes new files but never .env files.
+   Nothing is deleted; Bring back restores it. */
+async function setAside(dir, label) {
+  const bad = guard(dir); if (bad) return bad;
+  const dirty = await git(R(['status', '--porcelain']), { cwd: dir });
+  if (dirty.code !== 0) return { ok: false, error: firstLine(dirty) };
+  if (!dirty.out) return { ok: true, nothing: true, steps: ['Nothing to set aside'] };
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const msg = `RepoHub: ${String(label || 'set aside').replace(/[\r\n]/g, ' ').slice(0, 80)} (${stamp})`;
+  const r = await git(['stash', 'push', '--include-untracked', '-m', msg, '--', '.', ...KEEP_PATHS.map((p) => `:(exclude,top)${p}`), ':(exclude,glob)**/.env', ':(exclude,glob)**/.env.*'], { cwd: dir, timeout: 120000 });
+  if (r.code !== 0) return { ok: false, error: `Could not set the changes aside: ${firstLine(r)}` };
+  return { ok: true, steps: ['Set your changes aside (Bring back restores them)'], label: msg };
+}
+
+async function setAsideList(dir) {
+  if (!known(dir)) return { ok: false, error: 'Unknown repository.' };
+  const r = await git(R(['stash', 'list', '--format=%gd%x09%cr%x09%gs']), { cwd: dir, timeout: 20000 });
+  if (r.code !== 0) return { ok: true, items: [] };
+  return { ok: true, items: r.out.split('\n').filter(Boolean).map((l) => { const [ref, when, ...msg] = l.split('\t'); return { ref, when, message: msg.join('\t').replace(/^On [^:]+: /, '') }; }).filter((x) => /^stash@\{\d+\}$/.test(x.ref)) };
+}
+
+/* Bring set-aside changes back. Needs a clean folder so nothing is overwritten;
+   the stash is removed only when it applied cleanly. */
+async function bringBack(dir, ref) {
+  const bad = guard(dir); if (bad) return bad;
+  if (!/^stash@\{\d{1,3}\}$/.test(String(ref || ''))) return { ok: false, error: 'Unknown set-aside entry.' };
+  const dirty = await git(R(['status', '--porcelain', '--untracked-files=no']), { cwd: dir });
+  if (dirty.code !== 0) return { ok: false, error: firstLine(dirty, 'Could not check local changes.') };
+  if (dirty.out) return { ok: false, error: 'This folder has uncommitted changes. Commit them or set them aside first, then bring the older ones back.' };
+  const a = await git(['stash', 'apply', '--index', ref], { cwd: dir, timeout: 120000 });
+  // A failed apply can already have changed files. Never apply it a second time.
+  const a2 = a;
+  if (a2.code !== 0) {
+    if (/conflict/i.test(`${a2.out}${a2.err}`)) return { ok: false, conflicts: true, error: 'Some of these changes clash with newer versions of the same files. They were applied with conflict markers; the set-aside copy is kept. Open Claude here or VS Code to resolve them.' };
+    return { ok: false, error: `Could not bring the changes back: ${firstLine(a2)}` };
+  }
+  const dropped = await git(['stash', 'drop', ref], { cwd: dir });
+  if (dropped.code !== 0) return { ok: true, steps: ['Brought your changes back; the set-aside copy is also kept because Git could not remove it'] };
+  return { ok: true, steps: ['Brought your changes back'] };
+}
+
+async function dropAside(dir, ref) {
+  const bad = guard(dir); if (bad) return bad;
+  if (!/^stash@\{\d{1,3}\}$/.test(String(ref || ''))) return { ok: false, error: 'Unknown set-aside entry.' };
+  const r = await git(['stash', 'drop', ref], { cwd: dir });
+  return r.code === 0 ? { ok: true, steps: ['Deleted the set-aside changes'] } : { ok: false, error: firstLine(r) };
+}
+
+/* Set changes aside, then pull. For repositories you only use, where installs
+   rewrote lock files or Windows changed line endings. */
+async function asideAndPull(dir) {
+  const bad = guard(dir); if (bad) return bad;
+  const a = await setAside(dir, 'before updating');
+  if (!a.ok) return a;
+  const p = await pull(dir);
+  const steps = [...(a.nothing ? [] : a.steps), ...(p.steps || [])];
+  return p.ok ? { ok: true, steps } : { ...p, steps };
+}
+
+/* Local commits on someone else's project block clean updates. Keep them on a
+   backup branch, then make this branch match GitHub. Only on a clean folder. */
+async function matchRemote(dir) {
+  const bad = guard(dir); if (bad) return bad;
+  const dirty = await git(R(['status', '--porcelain', '--untracked-files=no']), { cwd: dir });
+  if (dirty.code !== 0) return { ok: false, error: firstLine(dirty, 'Could not check local changes.') };
+  if (dirty.out) return { ok: false, error: 'Set aside or commit the uncommitted changes first.' };
+  const up = await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { cwd: dir });
+  if (up.code !== 0) return { ok: false, error: 'This branch is not linked to a GitHub branch.' };
+  const f = await git(['fetch', 'origin'], { cwd: dir, timeout: 120000 });
+  if (f.code !== 0) return { ok: false, ...explain(f, 'Fetch failed') };
+  const ahead = await git(R(['rev-list', '--count', '@{upstream}..HEAD']), { cwd: dir });
+  if (ahead.code !== 0) return { ok: false, error: firstLine(ahead, 'Could not compare local commits.') };
+  const behind = await git(R(['rev-list', '--count', 'HEAD..@{upstream}']), { cwd: dir });
+  if (behind.code !== 0) return { ok: false, error: firstLine(behind, 'Could not compare remote commits.') };
+  if (ahead.out === '0' && behind.out === '0') return { ok: true, steps: ['Already matches GitHub'] };
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})(\d{4})$/, '$1-$2');
+  const branch = `repohub/backup-${stamp}-${Date.now()}`;
+  const b = await git(['branch', branch, 'HEAD'], { cwd: dir });
+  if (b.code !== 0) return { ok: false, error: `Could not create the backup branch: ${firstLine(b)}` };
+  // --keep refuses to overwrite untracked files or edits that appeared after the check.
+  const reset = await git(['reset', '--keep', '@{upstream}'], { cwd: dir, timeout: 120000 });
+  if (reset.code !== 0) return { ok: false, error: `Could not match GitHub: ${firstLine(reset)}. Your commits are on ${branch}.` };
+  return { ok: true, backup: branch, steps: [`Kept your ${ahead.out} commit(s) on the branch ${branch}`, 'This branch now matches GitHub'] };
 }
 
 async function setRemote(dir, url) {
@@ -568,7 +700,7 @@ async function localFile(dir, rel) {
 }
 
 module.exports = {
-  updateOne, updateDecision,
+  updateOne, updateDecision, changes, setAside, setAsideList, bringBack, dropAside, asideAndPull, matchRemote, LOCKFILES,
   localTree, localFile,
   scan, cached, status, statusMany, log, diff, fetch, pull, commit, push, syncRepo,
   setRemote, clearLock, clone, addExtra, setHidden, setFavorite, setCommands, settings, saveSettings,

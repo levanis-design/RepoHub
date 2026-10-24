@@ -1,10 +1,46 @@
-![RepoHub screenshot](RepoHub.jpg)
-![RepoHub screenshot](banner.png)
+![RepoHub](banner.png)
+
 # RepoHub
 
-**See what a GitHub repository is before you install it, install it in two steps, and keep every repository on this computer committed, synced and runnable.**
+**See what a GitHub repository is before you install it, try it safely, and keep every repository on your computer committed, synced and runnable.**
 
-By Levani Sidiani. Windows desktop app (Electron). Runs from source on macOS and Linux.
+A Windows desktop app (Electron) by Levani Sidiani, built with Claude. Runs from source on macOS and Linux.
+
+**[Download the latest release](https://github.com/levanis-design/RepoHub/releases/latest)** · [What it does](#what-it-does) · [Start from source](#start) · [Safety](#safety)
+
+![Sorting, folding a group and resizing the list](demo-sort-and-resize.gif)
+
+## Screenshots
+
+**Your repositories, grouped by what they do**, with favorites on top and what needs attention on each row.
+
+![Repositories grouped by category](01-library-by-category.png)
+
+**Paste a link** to see what it is, what it needs and how it installs, before downloading anything.
+
+![Exploring a repository from a link](docs/images/explore-a-link.png)
+
+| Health score and "Is this maintained?" | Most starred on GitHub |
+| --- | --- |
+| ![Health score](docs/images/health-score.png) | ![Most starred](docs/images/most-starred.png) |
+
+**Try before install**: the repository runs in a throwaway Docker container with none of your folders shared.
+
+![Try before install](05-try-before-install.png)
+
+| Blocked updates explained, with a safe fix | Search history |
+| --- | --- |
+| ![Why an update is blocked](docs/images/blocked-updates.png) | ![Search history](docs/images/search-history.png) |
+
+| AI agent sign-ins | GitIngest, GitDiagram, DeepWiki and GitMCP |
+| --- | --- |
+| ![AI agent sign-ins](docs/images/ai-sign-ins.png) | ![AI tools](docs/images/ai-tools.png) |
+
+Five colour themes, day and night:
+
+![Colour themes](themes.png)
+
+<sub>Screenshots use sample data. Repository statistics are snapshots taken from GitHub in October 2026.</sub>
 
 ---
 
@@ -53,7 +89,7 @@ By Levani Sidiani. Windows desktop app (Electron). Runs from source on macOS and
 ## Start
 
 - Double-click **start.bat** (the first run installs what RepoHub needs), or run `npm ci` then `npm start`
-- Double-click **build-windows.bat** to build `release\RepoHub-Setup-1.5.0.exe` and a portable exe
+- Double-click **build-windows.bat** to build `release\RepoHub-Setup-1.9.0.exe` and a portable exe
 - `npm run check` runs the engine checks (git actions on throwaway repositories, link parsing, file facts)
 
 ## Shortcuts
@@ -93,6 +129,15 @@ Each change is built in a new folder (RepoHub, RepoHub-v1.3.0, …), so the prev
 - The Claude summary runs in an empty temporary folder with built-in tools disabled, an empty strict MCP configuration, and user/project settings disabled; repository content is supplied as data
 - README content is sanitized and shown under a strict content policy; links open in your browser
 
+## When an update or push does not go through
+
+| Message | What it means | What to do |
+| --- | --- | --- |
+| "N uncommitted change(s)" or "There are uncommitted changes" | Files Git tracks changed on this computer, often by an install (package-lock.json) or by Windows line endings, not by you. Git will not download over them. New untracked files (a .env, build output) no longer block updates. | Git tab → **Set aside and update**. The changes become a Git stash: nothing is deleted, **Bring back** restores them. Update all offers the same for every skipped repository. |
+| "You are signed in as X, but that account cannot push to owner/repo" | It is someone else's project. Nobody but its owners can push to it. | Keep your changes local, or fork it on GitHub and point the folder at your fork. On these repositories the Git tab shows **Update from GitHub** instead of Push and Sync. |
+| "N local commits on someone else's project" | Commits made here (for example by Sync) can never be pushed there, and they get in the way of updates. | **Keep them on a backup branch and match GitHub**: your commits stay on a repohub/backup-… branch and the folder matches GitHub again. |
+| "GitHub needs you to sign in" | Git has no GitHub login. Push now opens Git Credential Manager's sign-in window when needed. | Settings → Accounts → Git sign-in → **Sign in to GitHub**. |
+
 ## Limits
 
 - Most starred uses GitHub search: 10 searches a minute without a login, 30 when connected, and at most 1,000 results per search. Pages are kept for 30 minutes. GitHub's Trending page has no public data feed, so "New this week" means repositories created in the last 7 days ranked by stars; GitHub Trending also opens in your browser
@@ -100,6 +145,13 @@ Each change is built in a new folder (RepoHub, RepoHub-v1.3.0, …), so the prev
 - Signed out, GitHub allows 60 requests an hour per network: about 20 previews, or 4 to 5 full Health checks (each about 13 requests). Sign in through the GitHub CLI for 5,000. Health and Activity results are kept for six hours. Private repositories cannot be previewed; download them instead (Git asks you to sign in), and RepoHub reads them from the folder
 - Sandboxes run the version on GitHub, not your local changes, and cannot clone private repositories. Desktop (Electron) apps cannot show their window from a container. Projects that need several services (Docker Compose) run without the extra services
 - Interactive commands (anything that asks questions) belong in **Terminal**, not the Output panel
+
+## Checks in 1.9.0
+
+- `npm run check`: 162 engine checks, using disposable repositories for Git operations. Includes staged-edit classification, nested `.env` preservation, restore conflicts, untracked-file protection, behind-only updates, backup branches, and push permission messages.
+- `npm run check:regression`: 18 regression tests.
+- `npm run check:syntax`: 26 JavaScript files.
+- `npm run check:desktop`: 16 checks against an isolated source Electron app, including preload, settings, README sanitization, keyboard shortcuts, and layout.
 
 ## Checks in 1.8.0
 
@@ -145,9 +197,3 @@ Supported devcontainer fields: `image`, string or argument-array `postCreateComm
 Agent account rows report installation, not authenticated sessions. Complete sign-in in the tool's own window. The npm Yarn installer installs Yarn Classic; modern Yarn projects need their documented Corepack setup.
 
 The original package metadata declares MIT, but no license text was supplied with the local app. This audit does not add or invent a license grant.
-
-## Screenshots
-![RepoHub screenshot](01-library-by-category.png)
-![RepoHub screenshot](05-try-before-install.png)
-![RepoHub screenshot](demo-sort-and-resize.gif)
-![RepoHub screenshot](themes.png)

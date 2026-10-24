@@ -146,7 +146,11 @@ function explain(r, fallback) {
   const text = `${r.err}\n${r.out}`;
   if (r.code === -1 && /ENOENT/.test(text)) return { error: 'Git is not installed or not on PATH. Install Git for Windows from git-scm.com, then restart RepoHub.' };
   if (r.code === -2) return { error: 'Git took too long to answer. Check the connection and try again.' };
-  if (LOGIN_RE.test(text)) return { needsLogin: true, error: 'GitHub needs you to sign in. Run Clone or Push again and complete the GitHub sign-in window that opens.' };
+  // Signed in, but this account may not write to the repository (someone else's project).
+  const denied = text.match(/Permission to (\S+?)(?:\.git)? denied to ([A-Za-z0-9-]+)/i);
+  if (denied) return { noPermission: true, account: denied[2], error: `You are signed in to GitHub as ${denied[2]}, but that account cannot push to ${denied[1]}. It belongs to someone else. Your commits stay on this computer; to keep your own copy on GitHub, fork it on GitHub and point this folder at your fork.` };
+  if (/The requested URL returned error: 403/i.test(text)) return { noPermission: true, error: 'GitHub refused the push (403): the signed-in account cannot write to this repository. If it is someone else\'s project, fork it on GitHub and push to your fork.' };
+  if (LOGIN_RE.test(text)) return { needsLogin: true, error: 'GitHub needs you to sign in. Use Sign in to GitHub in Settings → Accounts → Git sign-in, then try again.' };
   if (/Repository not found|does not appear to be a git repository/i.test(text)) return { error: 'GitHub cannot find that repository. Check the address, and that you are signed in to an account that can see it.' };
   if (NET_RE.test(text)) return { error: 'No connection to GitHub. Your work is saved locally; try again when you are back online.' };
   return { error: firstLine(r, fallback) };

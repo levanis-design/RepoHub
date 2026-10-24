@@ -5,7 +5,7 @@ explain it, install it, and manage every git repository on the computer.
 
 ## Versions
 
-- Never edit a working version in place: copy the folder to a new version folder (RepoHub-v1.7.0 → RepoHub-v1.8.0), inside the "Repo Hub Project" folder, bump `version` in package.json, and work there
+- Never edit a working version in place: copy the folder to a new version folder (RepoHub-v1.8.0 → RepoHub-v1.9.0), inside the "Repo Hub Project" folder, bump `version` in package.json, and work there
 - Do not copy node_modules; start.bat reinstalls it
 
 ## Run
@@ -20,7 +20,7 @@ explain it, install it, and manage every git repository on the computer.
 - `main.js` — window and every IPC handler, named `area:action`
 - `preload.js` — exposes `window.hub` (repos, gh, explain, job, term, sandbox, auth, insights, files, saved, open, tools, app)
 - `renderer.js` — the whole page: library list (left), Explore or repository view (right)
-- `repos.js` — scanning for repositories and the git work (status, fetch, pull, commit, push, sync, clone)
+- `repos.js` — scanning for repositories and the git work (status, fetch, pull, commit, push, sync, clone); blocked updates: `changes` (line endings, lock files, new files, real edits), `setAside`/`bringBack`/`dropAside` (git stash, never .env files), `asideAndPull`, `matchRemote` (backup branch, then match the upstream). Only tracked changes block pull and Update all; push is interactive so Git Credential Manager can sign in
 - `tooling.js` — runs git and other tools with a fixed PATH; plain-English error messages; probe for installed tools
 - `github.js` — link parsing and the GitHub preview (3 API calls; files from raw.githubusercontent.com)
 - `explain.js` — facts read from files (kind, needs, install plan, .env names, cautions) and the `claude -p` summary
@@ -52,6 +52,7 @@ explain it, install it, and manage every git repository on the computer.
 
 - Plain CommonJS JavaScript; no framework, no bundler, no native modules
 - Every git read uses `--no-optional-locks`; never leave `.git/index.lock` behind
+- Never discard a person's changes: set them aside (stash) or keep commits on a backup branch; reset only a clean folder
 - Nothing runs without a click; never pipe downloads into a shell
 - Never store or log passwords, tokens or API keys; refuse remotes with credentials in them
 - README HTML is untrusted: keep the sanitizer in `md()` and the CSP in `index.html`

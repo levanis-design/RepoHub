@@ -9,6 +9,7 @@ async function check(label, fn) { await fn(); count++; console.log(`PASS ${label
   const c = await connect();
   try {
     await c.send('Runtime.enable');
+    await c.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     // The launcher must point every REPOHUB_* setting at an isolated fixture.
     const settingsFile = (await c.evaluate('hub.settings.get()')).file;
     assert.match(settingsFile, /audit[\\/]local[\\/]/i, 'Desktop test refuses real user settings');

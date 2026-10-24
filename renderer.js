@@ -44,7 +44,7 @@
     setTimeout(() => el.classList.add('out'), ms);
     setTimeout(() => el.remove(), ms + 400);
   }
-  const fail = (res, fallback) => toast((res && res.error) || fallback || 'That did not work.', 9000, 'bad');
+  const fail = (res, fallback, ms) => toast((res && res.error) || fallback || 'That did not work.', ms || 9000, 'bad');
 
   /* ---------- markdown, made safe ---------- */
   const BAD_TAGS = 'script,style,iframe,object,embed,form,input,button,textarea,select,link,meta,base,frame,frameset,svg,math';
@@ -492,11 +492,63 @@
     let res;
     try { res = await hub.repos[action](r.path, message); } catch (e) { res = { ok: false, error: e && e.message }; }
     S.busy.delete(r.path);
-    if (res && res.ok) toast(`${r.name}: ${(res.steps || ['Done']).join(' · ')}`, 5000, 'good'); else fail(res);
+    if (res && res.ok) toast(`${r.name}: ${(res.steps || ['Done']).join(' · ')}`, 6000, 'good');
+    else if (action === 'pull' && res && /uncommitted changes/i.test(res.error || '')) {
+      S.busy.delete(r.path);
+      if (await confirmBox('Set your changes aside and update?', 'This folder has uncommitted changes, so Git will not download over them. RepoHub can set them aside first (a Git stash: nothing is deleted, and Bring back on the Git tab restores them), then update from GitHub.', 'Set aside and update')) return act(r, 'asideAndPull');
+    } else fail(res, undefined, res && res.noPermission ? 14000 : undefined);
     await refreshOne(r.path);
+    const L0 = S.local.get(r.path); if (L0) { L0.changes = null; L0.asideLoaded = false; L0.aside = null; }
     await loadLocal(r.path, true);
     paintList(); paintMain();
   }
+
+  /* Is this someone else's repository (one you cannot push to)? Known only when
+     the GitHub owner differs from your account name (Settings) and your login. */
+  function notMyRepo(s2) {
+    const owner = ownerOf(s2 && s2.remote).toLowerCase();
+    if (!owner || !/github\.com/i.test((s2 && s2.remote) || '')) return false;
+    const me = [S.owner, S.auth && S.auth.user && S.auth.user.login].filter(Boolean).map((x) => String(x).toLowerCase());
+    return me.length > 0 && !me.includes(owner);
+  }
+
+  /* What the uncommitted changes are, and the safe ways out. */
+  function changesHelper(r, s2, notMine) {
+    const p = r.path; const L = S.local.get(p) || {};
+    const box = h('div', { class: 'changes-help' }, h('div', { class: 'dim', text: 'Looking at the changes…' }));
+    const paint = (c) => {
+      if (!c || !c.ok) { box.replaceChildren(h('div', { class: 'dim', text: (c && c.error) || 'Could not read the changes.' })); return; }
+      const line = (n, text) => (n ? h('li', {}, h('b', { text: String(n) }), ` ${text}`) : null);
+      const onlyNoise = c.total && c.other.length === 0 && c.untracked.length === 0;
+      box.replaceChildren(
+        h('ul', { class: 'changes-kinds' },
+          line(c.lineEndingsOnly.length, `${c.lineEndingsOnly.length === 1 ? 'file differs' : 'files differ'} only in line endings (Windows and Linux store line breaks differently; the text is the same)`),
+          line(c.lockfiles.length, `lock ${c.lockfiles.length === 1 ? 'file was' : 'files were'} rewritten, usually by installing (${c.lockfiles.slice(0, 3).join(', ')})`),
+          line(c.untracked.length, `new ${c.untracked.length === 1 ? 'file' : 'files'} not in Git yet (${c.untracked.slice(0, 3).join(', ')}${c.untracked.length > 3 ? ', …' : ''})`),
+          line(c.other.length, `${c.other.length === 1 ? 'file' : 'files'} with real edits (${c.other.slice(0, 3).join(', ')}${c.other.length > 3 ? ', …' : ''})`)),
+        h('div', { class: 'dim', text: notMine
+          ? (onlyNoise ? 'These were made on this computer, not by you on purpose. Set them aside, then Update from GitHub works.' : 'Set them aside to update; Bring back restores them afterwards.')
+          : (onlyNoise ? 'These are not edits you made on purpose. Set them aside rather than committing them.' : 'Commit and Sync them if they are yours to keep, or set them aside to update first.') }),
+        h('div', { class: 'bar' },
+          h('button', { class: 'btn btn-sm btn-accent', text: 'Set aside and update', title: 'Sets the changes aside (recoverable), then pulls from GitHub', disabled: S.busy.has(p), onclick: () => act(r, 'asideAndPull') }),
+          h('button', { class: 'btn btn-sm', text: 'Set aside only', title: 'git stash, including new files but never .env files. Nothing is deleted.', disabled: S.busy.has(p), onclick: () => act(r, 'setAside') })),
+        c.aside.length ? asideList(r, c.aside) : null);
+    };
+    if (L.changes && L.changesFor === s2.changed) setTimeout(() => paint(L.changes), 0);
+    else hub.repos.changes(p).then((c) => { if (S.local.get(p)) { S.local.get(p).changes = c; S.local.get(p).changesFor = s2.changed; } paint(c); });
+    const tracked = s2.changedTracked != null ? s2.changedTracked : s2.changed;
+    return section(tracked ? `Why updates are blocked: ${plural(tracked, 'uncommitted change')}${s2.changed > tracked ? ` and ${plural(s2.changed - tracked, 'new file')}` : ''}` : `${plural(s2.changed, 'new file')} not in Git (these do not block updates)`, box);
+  }
+  function asideList(r, items) {
+    return h('div', { class: 'aside-list' }, h('div', { class: 'card-sub', text: 'Set aside earlier' }), items.slice(0, 8).map((x) => h('div', { class: 'aside-row' },
+      h('div', { class: 'grow' }, h('div', { text: x.message }), h('div', { class: 'dim', text: x.when })),
+      h('button', { class: 'btn btn-sm', text: 'Bring back', title: 'Needs a folder without uncommitted changes', onclick: () => act(r, 'bringBack', x.ref) }),
+      h('button', { class: 'btn btn-sm btn-ghost', text: 'Delete', onclick: async () => {
+        if (!(await confirmBox('Delete these set-aside changes?', `${x.message}\nThis cannot be undone.`, 'Delete'))) return;
+        await act(r, 'dropAside', x.ref);
+      } }))));
+  }
+  const asideCard = (r, items) => section('Changes you set aside', asideList(r, items));
 
   function runJob(r, command) {
     hub.job.start(r.path, command).then((res) => {
@@ -580,17 +632,36 @@
         !L.facts.claudeReady.claudeMd ? h('div', { class: 'dim tip', text: 'Tip: Open Claude here and type /init to have Claude write a CLAUDE.md for this project.' }) : null));
     } else if (tab === 'git') {
       const msg = h('input', { class: 'input grow', placeholder: 'Commit message (empty = "Update from this computer — N files")', disabled: busy });
+      const owner = ownerOf(s && s.remote);
+      const notMine = notMyRepo(s);
       body.push(...warnings);
       if (s && s.ok && !s.remote) body.push(section('No GitHub address', h('div', { class: 'dim', text: 'This repository only lives on this computer. Create an empty repository on GitHub, then paste its address here to back it up.' }), remoteForm(r)));
+      if (notMine) body.push(h('div', { class: 'info-box' }, h('b', { text: `This is ${owner}'s project. ` }),
+        'You can download their updates, but your GitHub account cannot push to it. Changes and commits you make here stay on this computer. To keep your own copy on GitHub, fork it on GitHub and set this folder\'s GitHub address to your fork.'));
       body.push(section('Git',
         h('div', { class: 'dim', text: s && s.ok ? `Branch ${s.branch || '(none)'}${s.upstream ? ` → ${s.upstream}` : ''}${s.lastMessage ? ` · last commit ${s.lastDate}: ${s.lastMessage}` : s.noCommits ? ' · no commits yet' : ''}` : '' }),
-        h('div', { class: 'bar' },
-          btn('Fetch', () => act(r, 'fetch'), { title: 'See what is new on GitHub without changing files' }),
-          btn('Pull', () => act(r, 'pull'), { title: 'Bring in new commits from GitHub (needs no uncommitted changes)' }),
-          btn('Push', () => act(r, 'push'), { title: 'Send your commits to GitHub' })),
-        h('div', { class: 'bar' }, msg,
+        notMine
+          ? h('div', { class: 'bar' },
+            btn('Fetch', () => act(r, 'fetch'), { title: 'See what is new on GitHub without changing files' }),
+            btn(s && s.behind ? `Update from GitHub (${s.behind} new)` : 'Update from GitHub', () => act(r, 'pull'), { cls: 'btn-accent', title: 'Download their latest commits. If you have uncommitted changes, RepoHub offers to set them aside first.' }),
+            btn('Commit on this computer', () => act(r, 'commit', msg.value), { title: 'Save your changes as a local commit (it cannot be pushed to their repository)' }))
+          : h('div', { class: 'bar' },
+            btn('Fetch', () => act(r, 'fetch'), { title: 'See what is new on GitHub without changing files' }),
+            btn('Pull', () => act(r, 'pull'), { title: 'Bring in new commits from GitHub. If you have uncommitted changes, RepoHub offers to set them aside first.' }),
+            btn('Push', () => act(r, 'push'), { title: 'Send your commits to GitHub. If GitHub asks you to sign in, Git Credential Manager opens its sign-in window.' })),
+        notMine ? h('div', { class: 'bar' }, msg) : h('div', { class: 'bar' }, msg,
           btn('Commit', () => act(r, 'commit', msg.value), { title: 'Save every change as one commit on this computer' }),
           btn('Sync', () => act(r, 'sync', msg.value), { cls: 'btn-accent', title: 'Commit, then pull, then push' }))));
+      if (notMine && s && s.ahead) body.push(section(`${plural(s.ahead, 'local commit')} on someone else's project`,
+        h('div', { class: 'dim', text: `These commits cannot be pushed to ${owner}'s repository${s.behind ? ', and they block downloading the new commits from GitHub' : ''}. RepoHub can keep them on a backup branch (nothing is lost) and make this folder match GitHub again.` }),
+        h('div', { class: 'bar' }, btn('Keep them on a backup branch and match GitHub', async () => {
+          if (s.changedTracked) { toast('Set aside or commit the uncommitted changes first.', 5000); return; }
+          if (!(await confirmBox('Match GitHub?', `RepoHub creates a branch named repohub/backup-<date and time> with your ${plural(s.ahead, 'commit')}, then makes ${s.branch} identical to GitHub. You can switch to the backup branch later to get them back.`, 'Keep and match'))) return;
+          await act(r, 'matchRemote');
+        }, { cls: 'btn-accent', disabled: !!s.changedTracked }))));
+      if (s && s.changed) body.push(changesHelper(r, s, notMine));
+      else if (L.aside && L.aside.length) body.push(asideCard(r, L.aside));
+      else if (!L.asideLoaded) { L.asideLoaded = true; hub.repos.asideList(p).then((x) => { if (x && x.ok) { L.aside = x.items; if (x.items.length && S.sel && S.sel.path === p) paintMain(); } }); }
       const files = (s && s.files) || [];
       body.push(section(`Changes${s && s.changed ? ` (${s.changed})` : ''}`,
         files.length ? h('div', { class: 'files-list' }, files.slice(0, 300).map((f) => h('button', { class: 'file-row', title: 'Show the change', onclick: () => showDiff(r, f.file) },
@@ -2175,7 +2246,7 @@
           h('button', { class: 'btn btn-sm', text: 'Open', onclick: () => openRepo(r.path) }),
           h('button', { class: 'btn btn-sm', text: 'Claude', title: 'Open Claude in this folder', onclick: () => hub.term.open(r.path, 'claude').then((x) => x && !x.ok && fail(x)) }),
           s2 && s2.remote ? h('button', { class: 'btn btn-sm', text: 'Fetch', disabled: busy, onclick: () => act(r, 'fetch').then(paintGrid) }) : null,
-          s2 && s2.behind && !s2.changed ? h('button', { class: 'btn btn-sm btn-accent', text: `Update (${s2.behind})`, disabled: busy, onclick: () => act(r, 'pull').then(paintGrid) }) : null));
+          s2 && s2.behind && !s2.changedTracked ? h('button', { class: 'btn btn-sm btn-accent', text: `Update (${s2.behind})`, disabled: busy, onclick: () => act(r, 'pull').then(paintGrid) }) : null));
     };
     main.replaceChildren(
       h('div', { class: 'head' }, h('div', { class: 'head-title' }, h('span', { class: 'head-name', text: 'Repositories' }), h('span', { class: 'chip', text: String(rows.length) })),
@@ -2223,6 +2294,24 @@
     await Promise.all([worker(), worker(), worker()]);
     const count = (k) => [...res.values()].filter((x) => x.state === k).length;
     summary.textContent = `Done: ${count('updated')} updated, ${count('current')} already up to date, ${count('skipped')} skipped, ${count('failed')} failed.`;
+    // Repositories skipped only because of uncommitted changes can be updated after setting the changes aside.
+    const blocked = [...res.values()].filter((x) => x.state === 'skipped' && /uncommitted change/i.test(x.note));
+    if (blocked.length) {
+      const again = h('button', { class: 'btn btn-sm btn-accent', text: `Set aside changes and update these ${blocked.length}` });
+      again.addEventListener('click', async () => {
+        again.disabled = true;
+        for (const x of blocked) {
+          x.state = 'working'; x.note = 'setting changes aside'; paint();
+          const r2 = await hub.repos.updateOne(x.r.path, true).catch((e) => ({ state: 'failed', note: e.message }));
+          x.state = r2.state || 'failed'; x.note = r2.note || r2.error || 'Update failed.';
+          await refreshOne(x.r.path); paint();
+        }
+        again.remove();
+        summary.textContent = `Done: ${count('updated')} updated, ${count('current')} already up to date, ${count('skipped')} skipped, ${count('failed')} failed. Set-aside changes can be brought back from each repository's Git tab.`;
+        paintList();
+      });
+      summary.after(h('div', { class: 'warn-box' }, `${plural(blocked.length, 'repository')} ${blocked.length === 1 ? 'was' : 'were'} skipped because of uncommitted changes. These are often line-ending or lock-file changes made on this computer, not your edits. RepoHub can set them aside (recoverable from the Git tab) and update. `, again));
+    }
     updating = false;
     paintList();
     if (S.sel && (S.sel.type === 'grid' || S.sel.type === 'repo')) paintMain();
