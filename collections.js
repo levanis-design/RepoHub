@@ -72,13 +72,27 @@ function deleteCollection(id) {
   return { ok: true };
 }
 
-function visit(full, snap) {
+/* Search history: every repository you explored, newest first, with how many
+   times and what you typed. Up to HISTORY_MAX entries. Turned off with the
+   keepHistory setting (main.js then does not call visit). */
+const HISTORY_MAX = 200;
+function visit(full, snap, query) {
   if (!FULL_RE.test(String(full || ''))) return { ok: false };
   const d = read();
-  d.history = [{ full, at: new Date().toISOString(), description: clean(snap && snap.description, 200) },
-    ...d.history.filter((h) => h.full.toLowerCase() !== full.toLowerCase())].slice(0, 40);
+  const old = d.history.find((h) => h.full.toLowerCase() === full.toLowerCase());
+  d.history = [{ full, at: new Date().toISOString(), description: clean(snap && snap.description, 200) || (old && old.description) || '', stars: Number(snap && snap.stars) || (old && old.stars) || 0, language: clean(snap && snap.language, 40) || (old && old.language) || '', query: clean(query, 300) || (old && old.query) || '', count: ((old && old.count) || 1) + (old ? 1 : 0) },
+    ...d.history.filter((h) => h.full.toLowerCase() !== full.toLowerCase())].slice(0, HISTORY_MAX);
   write(d);
   return { ok: true };
+}
+
+/* Remove one entry from the search history. */
+function forget(full) {
+  const d = read();
+  const before = d.history.length;
+  d.history = d.history.filter((h) => h.full.toLowerCase() !== String(full || '').toLowerCase());
+  write(d);
+  return { ok: true, removed: before - d.history.length };
 }
 
 function clearHistory() { const d = read(); d.history = []; write(d); return { ok: true }; }
@@ -98,4 +112,4 @@ function exportText(format, collectionId) {
   return [head.join(','), ...lines].join('\r\n');
 }
 
-module.exports = { all, save, unsave, createCollection, renameCollection, deleteCollection, visit, clearHistory, exportText, file };
+module.exports = { all, save, unsave, createCollection, renameCollection, deleteCollection, visit, forget, clearHistory, exportText, file, HISTORY_MAX };

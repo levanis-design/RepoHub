@@ -38,6 +38,24 @@ const CATALOG = [
   { id: 'codex', name: 'Codex CLI (OpenAI, sign in with ChatGPT)', group: 'agent', check: ['codex', ['--version']], npm: '@openai/codex', why: 'OpenAI\'s coding agent; signs in with your ChatGPT account' },
   { id: 'gemini', name: 'Gemini CLI (Google)', group: 'agent', check: ['gemini', ['--version']], npm: '@google/gemini-cli', why: 'Google\'s coding agent' },
   { id: 'copilot', name: 'GitHub Copilot CLI', group: 'agent', check: ['copilot', ['--version']], npm: '@github/copilot', why: 'GitHub\'s coding agent; needs a Copilot plan' },
+  // Added in 1.6.0. Package names checked on the npm registry and winget catalog, October 2026.
+  { id: 'qwen', name: 'Qwen Code (Alibaba)', group: 'agent', check: ['qwen', ['--version']], npm: '@qwen-code/qwen-code', why: 'Alibaba\'s coding agent for Qwen models; also connects to DeepSeek, Kimi and other providers', note: 'The free Qwen sign-in ended on April 15, 2026. Qwen Code now uses an Alibaba Cloud Coding Plan or an API key.' },
+  { id: 'kimi', name: 'Kimi Code (Moonshot AI)', group: 'agent', check: ['kimi', ['--version']], npm: '@moonshot-ai/kimi-code', why: 'Moonshot AI\'s coding agent for Kimi models', note: 'Kimi Code uses Git Bash as its shell, so install Git first.' },
+  { id: 'ollama', name: 'Ollama', group: 'agent', check: ['ollama', ['--version']], winget: 'Ollama.Ollama', why: 'runs AI models on this computer; signing in adds Ollama\'s cloud models', note: 'Local models need no account. Sign in only to use Ollama\'s cloud models.' },
+  { id: 'opencode', name: 'OpenCode', group: 'agent', check: ['opencode', ['--version']], npm: 'opencode-ai', why: 'an open-source coding agent that signs in to many providers: DeepSeek, xAI (Grok), Moonshot, GitHub Copilot, OpenRouter, Ollama and more' },
+  { id: 'kilo', name: 'Kilo Code CLI', group: 'agent', check: ['kilo', ['--version']], npm: '@kilocode/cli', why: 'an open-source coding agent with its own Kilo account or your provider keys' },
+  { id: 'cline', name: 'Cline CLI', group: 'agent', check: ['cline', ['--version']], npm: 'cline', why: 'the Cline coding agent in the terminal; Cline account or provider keys' },
+  { id: 'droid', name: 'Factory Droid', group: 'agent', check: ['droid', ['--version']], npm: '@factory/cli', why: 'Factory\'s coding agent; signs in with a Factory account' },
+  { id: 'vibe', name: 'Mistral Vibe', group: 'agent', check: ['vibe', ['--version']], uv: 'mistral-vibe', why: 'Mistral\'s coding agent; uses a Mistral API key', note: 'Installs with uv, so install uv first.' },
+];
+
+/* Model providers with no sign-in program for Windows. RepoHub never asks for
+   or stores their API keys: it opens the provider's own key page, and the key
+   is entered in an agent that supports the provider. */
+const PROVIDERS = [
+  { id: 'deepseek', name: 'DeepSeek', keyUrl: 'https://platform.deepseek.com/api_keys', via: ['opencode', 'qwen', 'kilo', 'cline'], note: 'DeepSeek has no official sign-in program. Create an API key, then add it in OpenCode, Qwen Code, Kilo Code or Cline.' },
+  { id: 'perplexity', name: 'Perplexity', keyUrl: 'https://console.perplexity.ai/', via: [], note: 'Perplexity\'s command-line tool (pplx) is for macOS and Linux only. Its API key works in tools that support Perplexity, such as its MCP server.' },
+  { id: 'xai', name: 'xAI (Grok)', keyUrl: 'https://console.x.ai/', via: ['opencode', 'qwen'], note: 'xAI has no official sign-in program for Windows. Create an API key, then add it in OpenCode or Qwen Code.' },
 ];
 
 /* Sign-in commands, run in a visible terminal. These are the only commands
@@ -48,6 +66,23 @@ const SIGN_IN = {
   codex: { label: 'ChatGPT (Codex)', command: 'codex login', hint: 'Choose "Sign in with ChatGPT" and finish in the browser.' },
   gemini: { label: 'Gemini', command: 'gemini', hint: 'Gemini CLI asks how to sign in the first time; choose your Google account.' },
   copilot: { label: 'GitHub Copilot', command: 'copilot', hint: 'Copilot CLI opens; type /login if it asks.' },
+  qwen: { label: 'Qwen', command: 'qwen', hint: 'Qwen Code opens; type /auth and choose an Alibaba Cloud plan or a provider key (DeepSeek, Kimi and others are listed).' },
+  kimi: { label: 'Kimi', command: 'kimi login', hint: 'Shows a code; enter it on the Kimi page that opens in the browser.' },
+  ollama: { label: 'Ollama', command: 'ollama signin', hint: 'Opens ollama.com in the browser to connect this computer to your Ollama account.' },
+  opencode: { label: 'OpenCode (DeepSeek, Grok, Copilot and more)', command: 'opencode auth login', hint: 'Pick a provider from the list, then sign in or paste its API key. OpenCode keeps the key, not RepoHub.' },
+  kilo: { label: 'Kilo Code', command: 'kilo auth login', hint: 'Pick Kilo (account sign-in in the browser) or another provider.' },
+  cline: { label: 'Cline', command: 'cline auth', hint: 'Sign in to a Cline account or choose a provider.' },
+  droid: { label: 'Factory', command: 'droid', hint: 'Droid opens and asks you to sign in to Factory in the browser the first time.' },
+  vibe: { label: 'Mistral', command: 'vibe --setup', hint: 'Paste a Mistral API key from console.mistral.ai; Vibe saves it in its own settings.' },
+};
+
+/* Sign-out commands, also run in a visible terminal. */
+const SIGN_OUT = {
+  gh: 'gh auth logout --hostname github.com',
+  codex: 'codex logout',
+  ollama: 'ollama signout',
+  opencode: 'opencode auth logout',
+  kilo: 'kilo auth logout',
 };
 
 async function hasWinget() { return !!(await probe('winget', ['--version'])); }
@@ -74,10 +109,12 @@ async function check() {
       id: t.id, name: t.name, group: t.group, why: t.why, note: t.note || '',
       version: versions[t.id] || '',
       method: t.includedWith ? `installed with ${CATALOG.find((x) => x.id === t.includedWith).name}` : installCommand(t, npmAvailable).split(' ')[0] || '',
-      canInstall: !t.includedWith && ((IS_WIN && !!t.winget) || !!t.npm),
+      canInstall: !t.includedWith && ((IS_WIN && !!t.winget) || !!t.npm || !!t.uv),
       command: installCommand(t, npmAvailable),
-      signIn: SIGN_IN[t.id] ? { label: SIGN_IN[t.id].label, hint: SIGN_IN[t.id].hint } : null,
+      signIn: SIGN_IN[t.id] ? { label: SIGN_IN[t.id].label, hint: SIGN_IN[t.id].hint, command: SIGN_IN[t.id].command } : null,
+      signOut: !!SIGN_OUT[t.id],
     })),
+    providers: PROVIDERS.map((p) => ({ ...p, via: p.via.map((id) => ({ id, name: CATALOG.find((x) => x.id === id).name, installed: !!versions[id] })) })),
   };
 }
 
@@ -86,6 +123,7 @@ function installCommand(t, npmAvailable) {
   if (t.includedWith) return '';
   if (IS_WIN && t.winget && !(t.npm && t.id === 'pnpm' && npmAvailable)) return `winget install --id ${t.winget} --exact --source winget`;
   if (t.npm) return `npm install --global ${t.npm}`;
+  if (t.uv) return `uv tool install ${t.uv}`;
   return '';
 }
 
@@ -126,4 +164,4 @@ function script(ids, { npmAvailable } = {}) {
   return file;
 }
 
-module.exports = { CATALOG, SIGN_IN, check, script, installCommand };
+module.exports = { CATALOG, SIGN_IN, SIGN_OUT, PROVIDERS, check, script, installCommand };

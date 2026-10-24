@@ -13,7 +13,7 @@ async function check(label, fn) { await fn(); count++; console.log(`PASS ${label
     const settingsFile = (await c.evaluate('hub.settings.get()')).file;
     assert.match(settingsFile, /audit[\\/]local[\\/]/i, 'Desktop test refuses real user settings');
     await c.evaluate('hub.settings.reset()'); await delay(250);
-    await check('actual Electron preload and version', async () => assert.equal((await c.evaluate('hub.app.version()')).version, '1.4.0'));
+    await check('actual Electron preload and version', async () => assert.equal((await c.evaluate('hub.app.version()')).version, require('../../package.json').version));
     await check('Indigo default', async () => assert.equal((await c.evaluate('hub.settings.get()')).settings.colorTheme, 'indigo'));
     await check('floating Settings', async () => { await c.evaluate("document.querySelector('#settings-btn').click()"); await delay(1200); assert.equal(await c.evaluate("document.querySelector('#settings-dock').hidden"), false); });
     await check('settings search finds code font', async () => {
@@ -44,8 +44,8 @@ async function check(label, fn) { await fn(); count++; console.log(`PASS ${label
       await c.evaluate("hub.settings.set({readmeImages:false})"); await delay(150);
       assert.equal(await c.evaluate("window.__repohub.md('![test](https://example.test/test.png)').querySelectorAll('img').length"), 0);
     });
-    await check('installer detection lists all 17 catalog entries', async () => {
-      const r = await c.evaluate('hub.installers.check()'); assert.equal(r.ok, true); assert.equal(r.tools.length, 17);
+    await check('installer detection lists every catalog entry', async () => {
+      const r = await c.evaluate('hub.installers.check()'); assert.equal(r.ok, true); assert.equal(r.tools.length, require('../../installers').CATALOG.length);
       fs.writeFileSync(path.resolve('audit/local/detection.json'), JSON.stringify(r, null, 2));
     });
     await check('preview rejects an unrelated local service', async () => assert.equal((await c.evaluate("hub.sandbox.preview('http://127.0.0.1:8888/','test')")).ok, false));

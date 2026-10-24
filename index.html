@@ -14,8 +14,9 @@
   <header class="topbar">
     <div class="brand"><span class="brand-mark">R</span> RepoHub</div>
     <form id="explore-form" class="explore">
-      <input id="explore-input" type="text" spellcheck="false" autocomplete="off"
-             placeholder="Paste a GitHub link to see what it is, for example https://github.com/owner/repository">
+      <input id="explore-input" type="text" spellcheck="false" autocomplete="off" role="combobox" aria-controls="explore-suggest" aria-autocomplete="list"
+             placeholder="Paste a GitHub link or owner/repository, or type to search your favorites and history">
+      <div id="explore-suggest" class="suggest" role="listbox" hidden></div>
       <button type="submit" class="btn btn-primary">Explore</button>
     </form>
     <button id="palette-btn" class="btn btn-ghost" title="Command palette: every action, searchable (Ctrl+K)">Actions <kbd>Ctrl K</kbd></button>
@@ -36,7 +37,9 @@
           <button id="sandboxes-btn" class="btn btn-sm" title="Repositories running in Docker sandboxes">Sandboxes <span id="sb-count" class="count"></span></button>
         </div>
         <div class="side-actions">
-          <button id="saved-btn" class="btn btn-sm" title="Saved repositories, collections and recently viewed">Saved <span id="saved-count" class="count"></span></button>
+          <button id="saved-btn" class="btn btn-sm" title="Favorites: starred repositories on this computer and from GitHub (Ctrl+Shift+S)">★ Favorites <span id="saved-count" class="count"></span></button>
+          <button id="history-btn" class="btn btn-sm" title="Every repository you explored (Ctrl+H)">History <span id="history-count" class="count"></span></button>
+          <button id="discover-btn" class="btn btn-sm" title="The most starred repositories on GitHub, by language, topic and time (Ctrl+T)">Most starred</button>
           <button id="compare-btn" class="btn btn-sm" title="Compare up to four repositories">Compare <span id="compare-count" class="count"></span></button>
         </div>
         <div id="more-menu" class="menu" hidden>
@@ -49,16 +52,20 @@
           <select id="view">
             <option value="all">All</option>
             <option value="attention">Needs attention</option>
+            <option value="favorites">★ Favorites</option>
             <option value="mine">Mine</option>
             <option value="others">Others</option>
           </select>
+          <select id="sort" title="Sort the list"><option value="recent">Most recent</option></select>
         </div>
       </div>
       <div id="summary-tiles" class="tiles"></div>
       <div id="repo-list" class="repo-list"></div>
     </aside>
 
+    <div id="side-split" class="splitter side-split" role="separator" aria-orientation="vertical" aria-label="Resize the repository list" tabindex="0" title="Drag to resize. Double-click to reset."></div>
     <main id="main" class="main"></main>
+    <div id="dock-split" class="splitter dock-split" role="separator" aria-orientation="vertical" aria-label="Resize Settings" tabindex="0" title="Drag to resize. Double-click to reset."></div>
     <aside id="settings-dock" class="settings-dock" hidden></aside>
   </div>
 

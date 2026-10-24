@@ -40,6 +40,9 @@ const DEFAULTS = {
   owner: '',          // your GitHub account; repos under it are grouped as "Mine"
   commands: {},       // per-repo custom commands: { "<path>": ["npm run build", ...] }
   last: [],           // last scan result, so the list shows instantly on open
+  favorites: [],      // local repositories you starred (paths)
+  categories: {},     // your own category for a repository: { "<path>": "web" } (categories.js)
+  authSource: '',     // which login RepoHub uses for GitHub requests: 'gh', 'git' or ''
 };
 
 function readConfig() {
@@ -134,6 +137,7 @@ function decorate(paths, cfg) {
     name: path.basename(p),
     isHome: norm(p) === home,
     hidden: isHidden(p, cfg),
+    favorite: (cfg.favorites || []).some((f) => norm(f) === norm(p)),
     commands: (cfg.commands || {})[p] || [],
   }));
 }
@@ -469,6 +473,16 @@ function setHidden(dir, hide) {
   return { ok: true };
 }
 
+/* Star or unstar a local repository. */
+function setFavorite(dir, on) {
+  if (!known(dir)) return { ok: false, error: 'Unknown repository.' };
+  const cfg = readConfig();
+  const list = (cfg.favorites || []).filter((f) => norm(f) !== norm(dir));
+  if (on) list.unshift(dir);
+  writeConfig({ favorites: list });
+  return { ok: true, favorite: !!on };
+}
+
 function setCommands(dir, list) {
   if (!known(dir)) return { ok: false, error: 'Unknown repository.' };
   const cfg = readConfig();
@@ -557,6 +571,6 @@ module.exports = {
   updateOne, updateDecision,
   localTree, localFile,
   scan, cached, status, statusMany, log, diff, fetch, pull, commit, push, syncRepo,
-  setRemote, clearLock, clone, addExtra, setHidden, setCommands, settings, saveSettings,
+  setRemote, clearLock, clone, addExtra, setHidden, setFavorite, setCommands, settings, saveSettings,
   runOptions, parsePorcelain, hasGitDir, configFile, known, readConfig, writeConfig,
 };

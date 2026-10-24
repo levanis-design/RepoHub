@@ -92,6 +92,10 @@
     output: new Map(),       // dir → text
     local: new Map(),        // dir → { info, facts, summary }
     tools: null,             // { git: 'git version …', node: '', … }
+    cats: {},                // dir → { id, label, why, mine } (categories.js)
+    catList: [],             // [[id, label], …] in display order
+    collapsed: new Set(),    // category groups folded in the list
+    sort: 'recent',          // recent | name | name-desc | attention | category
   };
   const st = (p) => S.status[p] || null;
   const repoByPath = (p) => S.repos.find((r) => r.path === p);
@@ -99,16 +103,61 @@
   const attention = (s) => !!s && s.ok && (s.changed > 0 || s.ahead > 0 || s.behind > 0 || s.locked || s.conflicts > 0 || !s.remote);
 
   /* ---------- library (left) ---------- */
+  const catOf = (r) => S.cats[r.path] || null;
+  const catRank = (r) => { const c = catOf(r); const i = c ? S.catList.findIndex(([id]) => id === c.id) : -1; return i < 0 ? 999 : i; };
+  const attScore = (r) => { const s2 = st(r.path); return s2 && s2.ok ? (s2.conflicts ? 100 : 0) + (s2.locked ? 50 : 0) + s2.changed + s2.ahead * 2 + s2.behind * 3 : -1; };
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const byRecent = (a, b) => String((st(b.path) || {}).lastDate || '').localeCompare(String((st(a.path) || {}).lastDate || '')) || byName(a, b);
+  const SORTS = [['recent', 'Most recent', 'Sort: recent'], ['name', 'Name, A to Z', 'Sort: A to Z'], ['name-desc', 'Name, Z to A', 'Sort: Z to A'], ['category', 'Category (what it does)', 'Sort: category'], ['attention', 'Needs attention first', 'Sort: attention']];
+  function sortRows(rows, mode) {
+    const cmp = mode === 'name' ? byName
+      : mode === 'name-desc' ? (a, b) => byName(b, a)
+        : mode === 'attention' ? (a, b) => attScore(b) - attScore(a) || byRecent(a, b)
+          : mode === 'category' ? (a, b) => catRank(a) - catRank(b) || byName(a, b)
+            : byRecent;
+    return rows.slice().sort(cmp);
+  }
+  /* Rows split into category groups, in category order: [{ id, label, rows }]. */
+  function groupByCategory(rows) {
+    const groups = new Map();
+    if (favFirst() && rows.some((r) => r.favorite)) groups.set('favorites', { id: 'favorites', label: '★ Favorites', rows: rows.filter((r) => r.favorite) });
+    for (const r of rows) {
+      if (favFirst() && r.favorite) continue;
+      const c = catOf(r) || { id: 'unknown', label: 'Reading…' };
+      if (!groups.has(c.id)) groups.set(c.id, { id: c.id, label: c.label, rows: [] });
+      groups.get(c.id).rows.push(r);
+    }
+    return [...groups.values()];
+  }
   function visible() {
-    return S.repos.filter((r) => {
+    return sortRows(S.repos.filter((r) => {
       if (r.hidden && !S.showHidden) return false;
       const s = st(r.path);
       if (S.view === 'attention' && !attention(s)) return false;
       if (S.view === 'mine' && !isMine(r)) return false;
       if (S.view === 'others' && isMine(r)) return false;
-      if (S.filter && !`${r.name} ${r.path} ${(s && s.remote) || ''}`.toLowerCase().includes(S.filter)) return false;
+      if (S.view === 'favorites' && !r.favorite) return false;
+      if (S.filter && !`${r.name} ${r.path} ${(s && s.remote) || ''} ${(catOf(r) || {}).label || ''}`.toLowerCase().includes(S.filter)) return false;
       return true;
-    }).sort((a, b) => String((st(b.path) || {}).lastDate || '').localeCompare(String((st(a.path) || {}).lastDate || '')) || a.name.localeCompare(b.name));
+    }), S.sort);
+  }
+  const favFirst = () => !S.settings || S.settings.favoritesFirst !== false;
+  /* Favorites on top, keeping the chosen order inside each part. */
+  const withFavoritesFirst = (rows) => (favFirst() ? [...rows.filter((r) => r.favorite), ...rows.filter((r) => !r.favorite)] : rows);
+  async function loadCategories() {
+    const r = await hub.repos.categories(S.repos.map((x) => x.path)).catch(() => null);
+    if (!r || !r.ok) return;
+    S.cats = r.categories || {};
+    S.catList = r.list || [];
+    paintList();
+    if (S.sel && S.sel.type === 'grid') paintGrid();
+    else if (S.sel && S.sel.type === 'repo') paintMain();
+  }
+  function setSort(mode) {
+    S.sort = mode;
+    const el = $('sort'); if (el) el.value = mode;
+    paintList();
+    setSetting({ librarySort: mode });
   }
 
   function chips(s, r) {
@@ -139,23 +188,50 @@
 
   function paintList() {
     paintTiles();
+    if (typeof paintSavedCount === 'function') paintSavedCount();
     const hiddenCount = S.repos.filter((r) => r.hidden).length;
     $('lib-count').textContent = S.repos.length ? `${S.repos.length - hiddenCount}${hiddenCount ? ` (+${hiddenCount} hidden)` : ''}` : '';
     const list = $('repo-list');
-    const rows = visible();
+    const rows = S.sort === 'category' ? visible() : withFavoritesFirst(visible());
     if (!S.repos.length) { list.replaceChildren(h('div', { class: 'empty', text: 'No repositories found yet. Use More → Rescan, or paste a link above and install one.' })); return; }
     if (!rows.length) { list.replaceChildren(h('div', { class: 'empty', text: 'Nothing matches.' })); return; }
-    list.replaceChildren(...rows.map((r) => {
+    const rowEl = (r) => {
       const s = st(r.path);
       const sel = S.sel && S.sel.type === 'repo' && S.sel.path === r.path;
-      return h('button', { class: `repo-row${sel ? ' sel' : ''}${r.hidden ? ' hidden-repo' : ''}`, title: r.path, onclick: () => openRepo(r.path) },
-        h('div', { class: 'row-top' }, h('span', { class: 'row-name', text: r.name }),
+      const c = catOf(r);
+      return h('button', { class: `repo-row${sel ? ' sel' : ''}${r.hidden ? ' hidden-repo' : ''}`, title: c ? `${r.path}\n${c.label} (${c.why})` : r.path, onclick: () => openRepo(r.path) },
+        h('div', { class: 'row-top' }, starToggle(r), h('span', { class: 'row-name', text: r.name }),
           S.busy.has(r.path) ? h('span', { class: 'spin', text: '⟳' }) : null,
           h('span', { class: 'grow' }), h('span', { class: 'dim', text: (s && s.lastDate) || '' })),
         h('div', { class: 'row-sub' }, h('span', { class: 'dim mono', text: [ownerOf(s && s.remote), s && s.branch].filter(Boolean).join(' · ') }),
+          c && S.sort !== 'category' ? h('span', { class: 'row-cat', text: c.label }) : null,
           h('span', { class: 'grow' }), ...chips(s, r)));
+    };
+    if (S.sort !== 'category') { list.replaceChildren(...rows.map(rowEl)); return; }
+    list.replaceChildren(...groupByCategory(rows).flatMap((g) => {
+      const folded = S.collapsed.has(g.id) && !S.filter;
+      return [
+        h('button', { class: `group-head${folded ? ' folded' : ''}`, 'aria-expanded': folded ? 'false' : 'true', title: folded ? 'Show this group' : 'Fold this group', onclick: () => { if (S.collapsed.has(g.id)) S.collapsed.delete(g.id); else S.collapsed.add(g.id); paintList(); } },
+          h('span', { class: 'caret', text: folded ? '▸' : '▾' }), h('span', { class: 'grow', text: g.label }), h('span', { class: 'count', text: String(g.rows.length) })),
+        ...(folded ? [] : g.rows.map(rowEl)),
+      ];
     }));
   }
+
+  /* ---------- favorites (local repositories) ---------- */
+  async function toggleFavorite(r) {
+    const on = !r.favorite;
+    const res = await hub.repos.setFavorite(r.path, on);
+    if (!res || !res.ok) { fail(res); return; }
+    r.favorite = on;
+    paintSavedCount();
+    toast(on ? `${r.name} added to favorites.` : `${r.name} removed from favorites.`, 2500, 'good');
+    paintList();
+    if (S.sel && ['repo', 'grid', 'saved'].includes(S.sel.type)) paintMain();
+  }
+  /* A star inside a list row (the row itself is a button, so this is a span). */
+  const starToggle = (r) => h('span', { class: `star${r.favorite ? ' on' : ''}`, role: 'button', 'aria-pressed': r.favorite ? 'true' : 'false', 'aria-label': r.favorite ? 'Remove from favorites' : 'Add to favorites', title: r.favorite ? 'Remove from favorites (Ctrl+D)' : 'Add to favorites (Ctrl+D)', text: r.favorite ? '★' : '☆',
+    onclick: (e) => { e.stopPropagation(); e.preventDefault(); toggleFavorite(r); } });
 
   async function refreshOne(p) {
     try { S.status[p] = await hub.repos.status(p); } catch (e) { S.status[p] = { ok: false, error: String(e && e.message) }; }
@@ -172,9 +248,10 @@
     if (!r || !r.ok) { fail(r, 'The scan failed.'); return; }
     S.repos = r.repos;
     if (r.timedOut) toast('The scan stopped after a minute. Narrow the folders in Tools.', 8000);
+    loadCategories().catch(() => {});
     await refreshAll();
   }
-  async function reloadList() { const c = await hub.repos.cached(); if (c && c.ok) S.repos = c.repos; }
+  async function reloadList() { const c = await hub.repos.cached(); if (c && c.ok) { S.repos = c.repos; loadCategories().catch(() => {}); } }
   async function fetchAll() {
     const list = S.repos.filter((r) => !r.hidden && st(r.path) && st(r.path).remote);
     let done = 0, failed = 0;
@@ -258,7 +335,7 @@
     if (data && data.ok) {
       const [f, sum] = await Promise.all([hub.explain.facts(data), hub.explain.summary(`gh:${data.fullName.toLowerCase()}`)]);
       S.sel.facts = f.facts; S.sel.summary = sum.summary;
-      hub.saved.visit(data.fullName, { description: data.description }).then(loadSaved).catch(() => {});
+      hub.saved.visit(data.fullName, { description: data.description, stars: data.stars, language: data.languages && data.languages[0] && data.languages[0].name }, value).then(loadSaved).catch(() => {});
     }
     paintMain();
     ensureTools().then(() => { if (S.sel && S.sel.type === 'explore') paintMain(); });
@@ -322,10 +399,39 @@
       have
         ? section('Already on this computer', h('div', { class: 'mono dim wrap', text: have.path }), h('div', { class: 'bar' }, h('button', { class: 'btn btn-primary', text: 'Open it', onclick: () => openRepo(have.path) })))
         : installBox(d),
-      sandboxCard({ link: d.web, cloneUrl: d.cloneUrl, repo: d.fullName }));
+      sandboxCard({ link: d.web, cloneUrl: d.cloneUrl, repo: d.fullName }),
+      aiToolsCard(d.fullName, { private: d.private }));
     main.replaceChildren(head, h('div', { class: `split${tab === 'files' ? ' full' : ''}` },
       h('div', { class: 'main-col' }, tabsBar([['overview', 'Overview'], ['health', E.ins ? `Health ${E.ins.total}` : 'Health'], ['activity', 'Activity'], ['files', 'Files'], ['readme', 'README']], tab, (t) => { E.tab = t; paintMain(); }), ...body),
       tab === 'files' ? null : side));
+  }
+
+  /* GitIngest, GitDiagram, DeepWiki and GitMCP for a GitHub repository. The
+     links are built in the main process from the owner and repository name. */
+  const AI_ACTION = { gitingest: 'Open as text', gitdiagram: 'Open diagram', deepwiki: 'Open wiki', gitmcp: 'Open' };
+  function aiToolsCard(full, opts = {}) {
+    const box = h('div', { class: 'ai-tools' }, h('div', { class: 'dim', text: 'Loading…' }));
+    hub.aitools.links(full).then((l) => {
+      if (!l || !l.ok) { box.replaceChildren(h('div', { class: 'dim', text: (l && l.error) || 'Not a GitHub repository.' })); return; }
+      box.replaceChildren(
+        opts.private ? h('div', { class: 'warn-box', text: 'This repository is private. These services only read public repositories.' }) : null,
+        ...l.services.map((sv) => h('div', { class: 'ai-tool' },
+          h('div', { class: 'ai-tool-text' },
+            h('div', { class: 'ai-tool-name' }, h('b', { text: sv.name }), h('span', { class: 'mono dim', text: ` ${sv.host}/${l.full}` })),
+            h('div', { class: 'dim', text: sv.what })),
+          h('div', { class: 'bar tight' },
+            h('button', { class: 'btn btn-sm', text: AI_ACTION[sv.id] || 'Open', title: `Opens ${sv.url} in your browser`, onclick: () => hub.aitools.open(sv.id, l.full).then((x) => x && !x.ok && fail(x)) }),
+            h('button', { class: 'btn btn-sm btn-ghost', text: 'Copy link', onclick: () => copyText(sv.url) }),
+            sv.id === 'gitmcp' ? h('button', { class: 'btn btn-sm btn-accent', text: 'Add to Claude Code', title: 'Lets Claude Code look things up in this repository\'s docs', onclick: () => addGitMcp(l.full) }) : null))));
+    });
+    return section('Explore with AI tools', h('div', { class: 'dim', text: 'Free web services that read public GitHub repositories. Links open in your browser.' }), box);
+  }
+  async function addGitMcp(full) {
+    const c = await hub.aitools.mcpCommand(full);
+    if (!c || !c.ok) { fail(c); return; }
+    if (!(await confirmBox('Add GitMCP to Claude Code?', `Claude Code will be able to look things up in ${full}'s docs in every project. RepoHub runs:\n${c.text}\nRemove it later with: claude mcp remove ${c.name} --scope user`, 'Add to Claude Code'))) return;
+    const r = await hub.aitools.addMcp(full);
+    if (r && r.ok) toast(r.already ? `${r.name} was already in Claude Code.` : `Added ${r.name} to Claude Code. Start a new Claude session to use it.`, 7000, 'good'); else fail(r);
   }
 
   function installBox(d) {
@@ -401,6 +507,23 @@
     });
   }
 
+  /* What the repository is for: RepoHub's guess, or your own choice. */
+  function categoryControl(r) {
+    const c = catOf(r);
+    if (!S.catList.length) return null;
+    const sel = h('select', { class: 'input input-sm', title: 'Category, used to group the list', onchange: async (e) => {
+      const res = await hub.repos.setCategory(r.path, e.target.value === '__auto' ? '' : e.target.value);
+      if (!res || !res.ok) { fail(res); return; }
+      S.cats[r.path] = res.category;
+      paintList(); paintMain();
+    } },
+    h('option', { value: '__auto', text: c && !c.mine ? `Detected: ${c.label}` : 'Let RepoHub detect it' }),
+    S.catList.map(([id, label]) => h('option', { value: id, text: label })));
+    sel.value = c && c.mine ? c.id : '__auto';
+    return h('div', { class: 'bar tight cat-line' }, h('span', { class: 'dim', text: 'Category' }), sel,
+      c ? h('span', { class: 'dim', text: c.mine ? 'chosen by you' : `Reason: ${c.why}` }) : h('span', { class: 'dim', text: 'reading…' }));
+  }
+
   function paintRepo() {
     const p = S.sel.path;
     const r = repoByPath(p);
@@ -420,6 +543,7 @@
       h('div', { class: 'head-title' }, h('span', { class: 'head-name', text: r.name }), ...chips(s, r)),
       h('div', { class: 'mono dim wrap', text: p }),
       s && s.remote ? h('div', { class: 'mono dim wrap', text: s.remote }) : null,
+      categoryControl(r),
       h('div', { class: 'bar' },
         h('button', { class: 'btn btn-primary', text: 'Open Claude here', title: 'A terminal window in this folder, running Claude Code', onclick: () => hub.term.open(p, 'claude').then((x) => x && !x.ok && fail(x)) }),
         btn('Terminal', () => hub.term.open(p, '').then((x) => x && !x.ok && fail(x))),
@@ -428,6 +552,7 @@
         btn('VS Code', () => hub.open.editor(p).then((x) => x && !x.ok && fail(x))),
         s && /^https:\/\//.test(webOf(s)) ? btn('GitHub', () => hub.open.web(webOf(s))) : null,
         h('span', { class: 'grow' }),
+        h('button', { class: `btn btn-sm${r.favorite ? ' btn-accent' : ''}`, text: r.favorite ? '★ Favorite' : '☆ Add to favorites', title: 'Ctrl+D', onclick: () => toggleFavorite(r) }),
         btn(r.hidden ? 'Show in list' : 'Hide', async () => { await hub.repos.setHidden(p, !r.hidden); r.hidden = !r.hidden; paintList(); paintMain(); })));
 
     const tab = S.sel.tab || 'overview';
@@ -450,6 +575,7 @@
         if (res && res.ok) L.summary = { text: res.text, at: new Date().toISOString() }; else fail(res, 'Claude could not explain it.');
         if (S.sel && S.sel.path === p) paintMain();
       }, L.explaining));
+      if (ghWeb) body.push(aiToolsCard(ghWeb));
       body.push(section('What RepoHub found in the files', ...factsBlock(L.facts, L.info),
         !L.facts.claudeReady.claudeMd ? h('div', { class: 'dim tip', text: 'Tip: Open Claude here and type /init to have Claude write a CLAUDE.md for this project.' }) : null));
     } else if (tab === 'git') {
@@ -536,6 +662,18 @@
     ov.hidden = false;
     ov.onclick = close;
     return { card, close };
+  }
+  /* Yes or no, in the app's own dialog. Resolves true only on the confirm button. */
+  function confirmBox(title, text, yes = 'OK') {
+    return new Promise((resolve) => {
+      let answered = false;
+      const done = (v) => { if (answered) return; answered = true; resolve(v); };
+      const { close } = overlay(title, 480, h('div', { class: 'dim', text }),
+        h('div', { class: 'bar end' }, h('button', { class: 'btn', text: 'Cancel', onclick: () => { close(); done(false); } }), h('button', { class: 'btn btn-primary', text: yes, onclick: () => { close(); done(true); } })));
+      const ov = $('overlay');
+      const prev = ov.onclick;
+      ov.onclick = () => { prev && prev(); done(false); };
+    });
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('overlay').hidden) { $('overlay').hidden = true; $('overlay').replaceChildren(); } });
 
@@ -839,30 +977,79 @@
     const el = $('auth-chip');
     if (!el) return;
     const core = S.auth.rate && S.auth.rate.core;
-    el.textContent = S.auth.signedIn ? `GitHub: ${S.auth.user ? S.auth.user.login : 'signed in'}` : 'GitHub: signed out';
+    el.textContent = S.auth.signedIn ? `GitHub: ${S.auth.user ? S.auth.user.login : 'signed in'}` : 'GitHub: not connected';
     el.className = `chip ${S.auth.signedIn ? 'ok' : ''}`;
     el.title = core ? `${core.remaining} of ${core.limit} GitHub requests left this hour` : '';
   }
+  /* RepoHub's own GitHub requests: borrow Git's saved login or the GitHub CLI's. */
   function loginSection() {
     const box = h('div', {});
+    const signIn = (source) => async (e) => {
+      e.target.disabled = true;
+      const r = await hub.auth.signIn(source);
+      e.target.disabled = false;
+      if (r && r.ok) toast(`Signed in as ${r.user.login}.`, 5000, 'good'); else fail(r);
+      await refreshAuth(); paint();
+    };
     const paint = () => {
       const core = S.auth.rate && S.auth.rate.core;
+      const via = S.auth.source === 'git' ? 'your Git sign-in' : 'the GitHub CLI';
       box.replaceChildren(
         h('div', { class: 'dim', text: S.auth.signedIn
-          ? `Signed in as ${S.auth.user ? S.auth.user.login : '(unknown)'} through the GitHub CLI.${core ? ` ${core.remaining} of ${core.limit} requests left this hour.` : ''}`
-          : `Signed out: GitHub allows 60 requests an hour${core ? ` (${core.remaining} left)` : ''}. Signing in raises it to 5,000, adds star history and opens private repositories. RepoHub borrows the GitHub CLI's login and never stores it.` }),
-        h('div', { class: 'bar' },
+          ? `Connected as ${S.auth.user ? S.auth.user.login : '(unknown)'} through ${via}.${core ? ` ${core.remaining} of ${core.limit} requests left this hour.` : ''}`
+          : `Not connected: GitHub allows 60 requests an hour${core ? ` (${core.remaining} left)` : ''}. Connecting raises it to 5,000, adds star history and opens private repositories. RepoHub borrows a login you already have, keeps it in memory only and never stores it.` }),
+        h('div', { class: 'bar wrap' },
           S.auth.signedIn
-            ? h('button', { class: 'btn btn-sm', text: 'Sign out', onclick: async () => { await hub.auth.signOut(); await refreshAuth(); paint(); } })
-            : h('button', { class: 'btn btn-sm btn-primary', text: 'Sign in', onclick: async (e) => {
-              e.target.disabled = true;
-              const r = await hub.auth.signIn();
-              e.target.disabled = false;
-              if (r && r.ok) toast(`Signed in as ${r.user.login}.`, 5000, 'good'); else fail(r);
-              await refreshAuth(); paint();
-            } }),
-          !S.auth.signedIn ? h('button', { class: 'btn btn-sm', text: 'Sign in with the GitHub CLI', title: 'Opens a terminal running "gh auth login"; finish in the browser, then press Sign in', onclick: () => hub.auth.openCliLogin().then((x) => x && !x.ok && fail(x)) }) : null,
-          !S.auth.signedIn ? h('button', { class: 'btn btn-sm', text: 'Get the GitHub CLI', onclick: () => hub.open.web('https://cli.github.com/') }) : null));
+            ? h('button', { class: 'btn btn-sm', text: 'Disconnect', title: 'RepoHub forgets the login. Git and the GitHub CLI stay signed in.', onclick: async () => { await hub.auth.signOut(); await refreshAuth(); paint(); } })
+            : [
+              h('button', { class: 'btn btn-sm btn-primary', text: 'Use my Git sign-in', title: 'The same GitHub login Git uses for clone, pull and push (Git Credential Manager)', onclick: signIn('git') }),
+              h('button', { class: 'btn btn-sm', text: 'Use the GitHub CLI login', title: 'The login held by the GitHub CLI (gh)', onclick: signIn('gh') }),
+              h('button', { class: 'btn btn-sm', text: 'Sign in with the GitHub CLI', title: 'Opens a terminal running "gh auth login"; finish in the browser, then press Use the GitHub CLI login', onclick: () => hub.auth.openCliLogin().then((x) => x && !x.ok && fail(x)) }),
+            ]));
+    };
+    paint();
+    return box;
+  }
+
+  /* Git's own sign-in: Git Credential Manager, which clone, pull and push use. */
+  function gitSignInSection(onChange) {
+    const box = h('div', { class: 'git-signin' }, h('div', { class: 'dim', text: 'Checking Git…' }));
+    const paint = async () => {
+      const g = await hub.gitauth.status().catch(() => null);
+      if (!g || !g.ok) { box.replaceChildren(h('div', { class: 'dim', text: (g && g.error) || 'Could not read the Git sign-in.' })); return; }
+      if (!g.git) {
+        box.replaceChildren(h('div', { class: 'dim', text: g.note }), h('div', { class: 'bar' }, h('button', { class: 'btn btn-sm btn-primary', text: 'Install Git', onclick: () => runInstall(['git']) })));
+        return;
+      }
+      const kids = [h('div', { class: 'dim', text: `Git ${g.git}. Saved logins are kept by ${g.helper.label}.${g.gcm ? ` Git Credential Manager ${g.gcm}.` : ''}` })];
+      if (!g.gcm && g.helper.kind !== 'gh') kids.push(h('div', { class: 'warn-box', text: 'Git Credential Manager was not found. It comes with Git for Windows: reinstall Git from Installers (keep "Git Credential Manager" ticked), then press Check again.' }));
+      if (g.gcm && !['gcm', 'gh'].includes(g.helper.kind)) {
+        kids.push(h('div', { class: 'warn-box' }, `Git is not set to use Git Credential Manager, so GitHub sign-in may not be saved. `,
+          h('button', { class: 'btn btn-sm', text: 'Use Git Credential Manager', title: 'Sets credential.helper to manager in your Git settings', onclick: async () => { const r = await hub.gitauth.useGcm(); if (r && r.ok) { toast('Git now uses Git Credential Manager.', 5000, 'good'); paint(); } else fail(r); } })));
+      }
+      if (g.helper.kind === 'gh') kids.push(h('div', { class: 'dim', text: 'Git uses the GitHub CLI login for github.com. Sign in or out with the GitHub CLI below.' }));
+      if (g.accounts.length) {
+        kids.push(h('div', { class: 'git-accounts' }, g.accounts.map((a) => h('div', { class: 'agent' },
+          h('span', { class: 'dot ok' }),
+          h('div', { class: 'grow' }, h('div', { class: 'agent-name', text: a }), h('div', { class: 'dim', text: 'GitHub account saved in Git Credential Manager' })),
+          h('button', { class: 'btn btn-sm', text: 'Sign out', onclick: async (e) => {
+            if (!(await confirmBox(`Sign ${a} out of Git?`, 'Git forgets this GitHub login. Pushing and pulling private repositories will ask you to sign in again.', 'Sign out'))) return;
+            e.target.disabled = true;
+            const r = await hub.gitauth.logout(a);
+            if (r && r.ok) toast(`${a} is signed out of Git.`, 5000, 'good'); else fail(r);
+            paint();
+          } })))));
+      } else if (g.gcm) {
+        kids.push(h('div', { class: 'dim', text: 'No GitHub account is saved in Git yet.' }));
+      }
+      kids.push(h('div', { class: 'bar wrap' },
+        g.gcm ? h('button', { class: `btn btn-sm${g.accounts.length ? '' : ' btn-primary'}`, text: g.accounts.length ? 'Add another GitHub account' : 'Sign in to GitHub', title: 'Opens Git Credential Manager\'s browser sign-in in a terminal window', onclick: async () => {
+          const r = await hub.gitauth.login();
+          if (r && r.ok) toast('Finish the sign-in in the browser window, then press Check again.', 9000); else fail(r);
+        } }) : null,
+        h('button', { class: 'btn btn-sm', text: 'Check again', onclick: () => { box.replaceChildren(h('div', { class: 'dim', text: 'Checking Git…' })); paint(); if (onChange) onChange(); } }),
+        g.helper.kind !== 'gh' ? h('button', { class: 'btn btn-sm', text: 'Let Git use the GitHub CLI login', title: 'Runs "gh auth setup-git" in a terminal: Git then uses the GitHub CLI login for github.com', onclick: () => hub.gitauth.useGh().then((x) => x && !x.ok && fail(x)) }) : null));
+      box.replaceChildren(...kids);
     };
     paint();
     return box;
@@ -870,12 +1057,12 @@
 
   /* ---------- saved repositories ---------- */
   async function loadSaved() { const r = await hub.saved.all().catch(() => null); if (r && r.ok) S.saved = r; paintSavedCount(); }
-  function paintSavedCount() { const el = $('saved-count'); if (el) el.textContent = S.saved.bookmarks.length ? String(S.saved.bookmarks.length) : ''; const c = $('compare-count'); if (c) c.textContent = S.compare.length ? String(S.compare.length) : ''; }
+  function paintSavedCount() { const nFav = S.saved.bookmarks.length + S.repos.filter((r) => r.favorite).length; const el = $('saved-count'); if (el) el.textContent = nFav ? String(nFav) : ''; const hc = $('history-count'); if (hc) hc.textContent = S.saved.history.length ? String(S.saved.history.length) : ''; const c = $('compare-count'); if (c) c.textContent = S.compare.length ? String(S.compare.length) : ''; }
   const bookmarkOf = (full) => S.saved.bookmarks.find((b) => b.full.toLowerCase() === String(full).toLowerCase());
 
   function saveButton(d, ins) {
     const b = bookmarkOf(d.fullName);
-    return h('button', { class: `btn${b ? ' btn-accent' : ''}`, text: b ? '★ Saved' : '☆ Save', title: b ? 'Edit notes, tags and collections' : 'Save to your list', onclick: async () => {
+    return h('button', { class: `btn${b ? ' btn-accent' : ''}`, text: b ? '★ Favorite' : '☆ Add to favorites', title: b ? 'Edit notes, tags and collections (Ctrl+D)' : 'Add to your favorites (Ctrl+D)', onclick: async () => {
       if (!b) {
         const r = await hub.saved.save(d.fullName, { snap: { description: d.description, stars: d.stars, language: d.languages[0] && d.languages[0].name, license: d.license, score: ins && ins.total } });
         if (!r || !r.ok) { fail(r); return; }
@@ -898,7 +1085,7 @@
       S.saved.collections.length ? null : h('span', { class: 'dim', text: 'No collections yet.' }));
     paintCols();
     const newCol = h('input', { class: 'input grow', placeholder: 'New collection name' });
-    const { close } = overlay(`Saved: ${full}`, 560,
+    const { close } = overlay(`Favorite: ${full}`, 560,
       h('div', { class: 'card-sub', text: 'Notes' }), note,
       h('div', { class: 'card-sub', text: 'Tags' }), h('div', { class: 'bar' }, tags),
       h('div', { class: 'card-sub', text: 'Collections' }), colsEl,
@@ -909,7 +1096,7 @@
         await loadSaved(); paintCols();
       } })),
       h('div', { class: 'bar end' },
-        h('button', { class: 'btn btn-danger', text: 'Remove from saved', onclick: async () => { await hub.saved.unsave(full); close(); await loadSaved(); paintMain(); } }),
+        h('button', { class: 'btn btn-danger', text: 'Remove from favorites', onclick: async () => { await hub.saved.unsave(full); close(); await loadSaved(); paintMain(); } }),
         h('span', { class: 'grow' }),
         h('button', { class: 'btn btn-primary', text: 'Save', onclick: async () => {
           const r = await hub.saved.save(full, { note: note.value, tags: tags.value.split(',').map((x) => x.trim()).filter(Boolean), collections: [...picks] });
@@ -929,14 +1116,17 @@
     const q = (V.filter || '').toLowerCase();
     const rows = S.saved.bookmarks.filter((b) => (!V.col || (b.collections || []).includes(V.col))
       && (!q || `${b.full} ${b.note} ${(b.tags || []).join(' ')} ${(b.snap && b.snap.description) || ''}`.toLowerCase().includes(q)));
-    const filter = h('input', { class: 'input grow', type: 'search', placeholder: 'Search saved: name, note, tag', value: V.filter || '' });
+    const filter = h('input', { class: 'input grow', type: 'search', placeholder: 'Search favorites: name, note, tag', value: V.filter || '' });
     filter.addEventListener('input', () => { V.filter = filter.value; const pos = filter.selectionStart; paintSaved(); const f2 = main.querySelector('input[type=search]'); if (f2) { f2.focus(); f2.setSelectionRange(pos, pos); } });
     const colSel = h('select', { class: 'input', onchange: (e) => { V.col = e.target.value; paintSaved(); } },
       h('option', { value: '', text: 'All collections' }), S.saved.collections.map((c) => h('option', { value: c.id, text: `${c.name} (${S.saved.bookmarks.filter((b) => (b.collections || []).includes(c.id)).length})` })));
     colSel.value = V.col || '';
     const col = S.saved.collections.find((c) => c.id === V.col);
     main.replaceChildren(
-      h('div', { class: 'head' }, h('div', { class: 'head-title' }, h('span', { class: 'head-name', text: 'Saved repositories' }), h('span', { class: 'chip', text: String(S.saved.bookmarks.length) })),
+      h('div', { class: 'head' }, h('div', { class: 'head-title' }, h('span', { class: 'head-name', text: '★ Favorites' }), h('span', { class: 'chip', text: String(S.saved.bookmarks.length + S.repos.filter((r) => r.favorite).length) })),
+        h('div', { class: 'dim', text: 'Repositories on this computer you starred, and GitHub repositories you added from Explore, with your notes, tags and collections.' })),
+      localFavoritesSection(''),
+      h('div', { class: 'head sub-head' }, h('div', { class: 'head-title' }, h('span', { class: 'sub-name', text: 'From GitHub' }), h('span', { class: 'chip', text: String(S.saved.bookmarks.length) })),
         h('div', { class: 'bar' }, filter, colSel,
           col ? h('button', { class: 'btn btn-sm', text: 'Rename', onclick: () => renameCollection(col) }) : null,
           col ? h('button', { class: 'btn btn-sm btn-danger', text: 'Delete collection', title: 'Deletes the collection only; the repositories stay saved', onclick: async () => { await hub.saved.deleteCollection(col.id); V.col = ''; await loadSaved(); paintSaved(); } }) : null,
@@ -956,10 +1146,224 @@
         h('div', { class: 'saved-actions' },
           h('button', { class: 'btn btn-sm', text: 'Edit', onclick: () => editBookmark(b.full) }),
           h('button', { class: 'btn btn-sm', text: S.compare.includes(b.full) ? 'In compare' : 'Compare', disabled: S.compare.includes(b.full), onclick: () => addCompare(b.full) })))))
-        : section('', h('div', { class: 'dim', text: S.saved.bookmarks.length ? 'Nothing matches.' : 'Nothing saved yet. Paste a link above, then press ☆ Save.' })),
-      S.saved.history.length ? section('Recently viewed',
-        h('div', { class: 'history' }, S.saved.history.slice(0, 20).map((x) => h('button', { class: 'linkish', text: x.full, title: x.description || '', onclick: () => { $('explore-input').value = `https://github.com/${x.full}`; explore(x.full); } }))),
-        h('div', { class: 'bar' }, h('button', { class: 'btn btn-sm', text: 'Clear history', onclick: async () => { await hub.saved.clearHistory(); await loadSaved(); paintSaved(); } }))) : null);
+        : section('', h('div', { class: 'dim', text: S.saved.bookmarks.length ? 'Nothing matches.' : 'No GitHub favorites yet. Explore a link above, then press ☆ Add to favorites.' })),
+      S.saved.history.length ? section('Recently explored',
+        h('div', { class: 'history' }, S.saved.history.slice(0, 12).map((x) => h('button', { class: 'linkish', text: x.full, title: x.description || '', onclick: () => openFull(x.full) }))),
+        h('div', { class: 'bar' }, h('button', { class: 'btn btn-sm', text: `Search history (${S.saved.history.length})`, onclick: () => showHistory() }))) : null);
+  }
+
+  /* Starred repositories on this computer, as rows with their status. */
+  function localFavoritesSection(q) {
+    const favs = S.repos.filter((r) => r.favorite && (!q || `${r.name} ${(catOf(r) || {}).label || ''}`.toLowerCase().includes(q)));
+    return section(`On this computer (${S.repos.filter((r) => r.favorite).length})`,
+      favs.length ? h('div', { class: 'saved-list' }, favs.map((r) => {
+        const s2 = st(r.path); const c = catOf(r);
+        return h('div', { class: 'saved-row' },
+          h('div', { class: 'grow' },
+            h('div', { class: 'saved-top' }, h('button', { class: 'linkish', text: r.name, onclick: () => openRepo(r.path) }), c ? h('span', { class: 'row-cat', text: c.label }) : null, ...chips(s2, r)),
+            h('div', { class: 'dim mono', text: [ownerOf(s2 && s2.remote), s2 && s2.branch, s2 && s2.lastDate].filter(Boolean).join(' · ') })),
+          h('div', { class: 'saved-actions' },
+            h('button', { class: 'btn btn-sm', text: 'Open', onclick: () => openRepo(r.path) }),
+            h('button', { class: 'btn btn-sm', text: 'Claude', onclick: () => hub.term.open(r.path, 'claude').then((x) => x && !x.ok && fail(x)) }),
+            h('button', { class: 'btn btn-sm btn-ghost', text: '★ Remove', title: 'Remove from favorites', onclick: () => toggleFavorite(r) })));
+      })) : h('div', { class: 'dim', text: S.repos.some((r) => r.favorite) ? 'Nothing matches.' : 'Star a repository in the list (☆ next to its name) or press Ctrl+D on its page to keep it here and at the top of the list.' }));
+  }
+
+  /* ---------- search history ---------- */
+  const openFull = (full) => { $('explore-input').value = `https://github.com/${full}`; hideSuggest(); explore(full); };
+  function when(iso) {
+    const t = new Date(iso); const now = new Date();
+    const mins = Math.round((now - t) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+    if (t.toDateString() === now.toDateString()) return `${Math.round(mins / 60)} hour${Math.round(mins / 60) === 1 ? '' : 's'} ago`;
+    return t.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: t.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
+  }
+  function dayGroup(iso) {
+    const t = new Date(iso); const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    if (t.getTime() >= start) return 'Today';
+    if (t.getTime() >= start - 86400000) return 'Yesterday';
+    if (t.getTime() >= start - 6 * 86400000) return 'Earlier this week';
+    return 'Older';
+  }
+  function showHistory() { S.sel = { type: 'history', q: (S.sel && S.sel.type === 'history' && S.sel.q) || '' }; paintList(); paintMain(); }
+  async function forgetHistory(full) { await hub.saved.forget(full); await loadSaved(); }
+  async function clearAllHistory() {
+    if (!(await confirmBox('Clear search history?', `Removes all ${S.saved.history.length} repositories from your search history. Favorites stay.`, 'Clear history'))) return;
+    await hub.saved.clearHistory(); await loadSaved();
+    if (S.sel && S.sel.type === 'history') paintMain();
+    toast('Search history cleared.', 3000, 'good');
+  }
+  function paintHistory() {
+    const V = S.sel;
+    const q = (V.q || '').toLowerCase();
+    const rows = S.saved.history.filter((x) => !q || `${x.full} ${x.description || ''} ${x.query || ''} ${x.language || ''}`.toLowerCase().includes(q));
+    const filter = h('input', { class: 'input grow', type: 'search', placeholder: 'Search your history: name, description, language', value: V.q || '' });
+    filter.addEventListener('input', () => { V.q = filter.value; const pos = filter.selectionStart; paintHistory(); const f2 = main.querySelector('.hist-tools input'); if (f2) { f2.focus(); f2.setSelectionRange(pos, pos); } });
+    const groups = [];
+    for (const x of rows) { const g = dayGroup(x.at); let last = groups[groups.length - 1]; if (!last || last.g !== g) { last = { g, items: [] }; groups.push(last); } last.items.push(x); }
+    const off = S.settings && S.settings.keepHistory === false;
+    main.replaceChildren(
+      h('div', { class: 'head' }, h('div', { class: 'head-title' }, h('span', { class: 'head-name', text: 'Search history' }), h('span', { class: 'chip', text: String(S.saved.history.length) })),
+        h('div', { class: 'dim', text: 'Every repository you explored, newest first. It stays on this computer.' }),
+        h('div', { class: 'bar hist-tools' }, filter,
+          S.saved.history.length ? h('button', { class: 'btn btn-sm btn-danger', text: 'Clear history', onclick: clearAllHistory }) : null)),
+      off ? h('div', { class: 'warn-box' }, 'Search history is turned off, so new searches are not added. ', h('button', { class: 'btn btn-sm', text: 'Turn it on', onclick: async () => { await setSetting({ keepHistory: true }); paintHistory(); } })) : null,
+      !rows.length ? section('', h('div', { class: 'dim', text: S.saved.history.length ? 'Nothing matches.' : 'No searches yet. Paste a GitHub link or owner/repository in the box at the top.' }))
+        : h('div', { class: 'hist-groups' }, groups.map((g) => h('section', { class: 'card hist-group' }, h('div', { class: 'card-title', text: g.g }),
+          h('div', { class: 'hist-list' }, g.items.map((x) => {
+            const fav = bookmarkOf(x.full);
+            return h('div', { class: 'hist-row' },
+              h('div', { class: 'grow' },
+                h('div', { class: 'saved-top' }, h('button', { class: 'linkish', text: x.full, onclick: () => openFull(x.full) }),
+                  x.stars ? h('span', { class: 'dim', text: `★ ${num(x.stars)}` }) : null, x.language ? h('span', { class: 'dim', text: x.language }) : null,
+                  fav ? h('span', { class: 'chip ok', text: 'favorite' }) : null),
+                x.description ? h('div', { class: 'dim', text: x.description }) : null,
+                h('div', { class: 'dim hist-meta', text: [when(x.at), x.count > 1 ? `explored ${x.count} times` : ''].filter(Boolean).join(' · ') })),
+              h('div', { class: 'saved-actions' },
+                h('button', { class: 'btn btn-sm', text: 'Open', onclick: () => openFull(x.full) }),
+                !fav ? h('button', { class: 'btn btn-sm', text: '☆ Favorite', title: 'Add to favorites', onclick: async () => { const r = await hub.saved.save(x.full, { snap: { description: x.description, stars: x.stars, language: x.language } }); if (r && r.ok) { await loadSaved(); toast(`${x.full} added to favorites.`, 2500, 'good'); paintHistory(); } else fail(r); } }) : null,
+                h('button', { class: 'icon-btn', text: '✕', title: 'Remove from history', 'aria-label': `Remove ${x.full} from history`, onclick: async () => { await forgetHistory(x.full); paintHistory(); } })));
+          }))))));
+  }
+
+  /* ---------- most starred: GitHub search sorted by stars ---------- */
+  const DISC_DEFAULT = { period: 'all', language: '', topic: '', text: '', hideArchived: true };
+  const DISC_PERIODS = [['all', 'All time'], ['year', 'New this year'], ['month', 'New this month'], ['week', 'New this week']];
+  const DISC_PRESETS = [['', 'Everything'], ['ai-agents', 'AI agents'], ['llm', 'LLM'], ['mcp', 'MCP'], ['claude-code', 'Claude Code'], ['self-hosted', 'Self-hosted'], ['cli', 'Command line'], ['awesome-list', 'Awesome lists']];
+  S.disc = (() => {
+    let params = { ...DISC_DEFAULT };
+    try { params = { ...params, ...(JSON.parse(localStorage.getItem('repohub.discover') || '{}') || {}) }; } catch { /* private storage */ }
+    return { params, items: [], page: 0, total: 0, totalFound: 0, loading: false, error: '', key: '' };
+  })();
+  const saveDisc = () => { try { localStorage.setItem('repohub.discover', JSON.stringify(S.disc.params)); } catch { /* private storage */ } };
+  const shortNum = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, '')}k` : String(n));
+  function showDiscover() { S.sel = { type: 'discover' }; paintList(); paintMain(); if (!S.disc.items.length && !S.disc.loading) runDiscover(true); }
+  async function runDiscover(reset) {
+    const D = S.disc;
+    if (D.loading) return;
+    const key = JSON.stringify(D.params);
+    if (reset || key !== D.key) { D.items = []; D.page = 0; D.total = 0; D.key = key; }
+    D.loading = true; D.error = '';
+    if (S.sel && S.sel.type === 'discover') paintDiscover();
+    const r = await hub.discover.search(D.params, D.page + 1).catch((e) => ({ ok: false, error: e.message }));
+    D.loading = false;
+    if (JSON.stringify(D.params) !== key) return; // filters changed meanwhile
+    if (!r || !r.ok) D.error = (r && r.error) || 'GitHub search failed.';
+    else { D.items = D.items.concat(r.items); D.page = r.page; D.total = r.total; D.totalFound = r.totalFound; D.hasMore = r.hasMore; D.q = r.q; }
+    if (S.sel && S.sel.type === 'discover') paintDiscover();
+  }
+  function setDisc(patch) { Object.assign(S.disc.params, patch); saveDisc(); runDiscover(true); }
+  function paintDiscover() {
+    const D = S.disc; const P = D.params;
+    const localByRemote = new Map(S.repos.map((r) => [String((st(r.path) || {}).web || '').toLowerCase().replace(/^https:\/\/github\.com\//, ''), r]));
+    const periodSeg = h('div', { class: 'seg' }, DISC_PERIODS.map(([v, l]) => h('button', { class: `seg-btn${P.period === v ? ' on' : ''}`, text: l, onclick: () => setDisc({ period: v }) })));
+    const lang = h('select', { class: 'input', title: 'Language', onchange: (e) => setDisc({ language: e.target.value }) },
+      h('option', { value: '', text: 'Any language' }), DISC_LANGS.map((l) => h('option', { value: l, text: l })));
+    lang.value = P.language || '';
+    const text = h('input', { class: 'input grow', type: 'search', placeholder: 'Keywords (optional), for example video editor', value: P.text || '' });
+    const topic = h('input', { class: 'input', style: { width: '170px' }, placeholder: 'Topic, for example rag', value: P.topic || '' });
+    const go = () => setDisc({ text: text.value.trim(), topic: topic.value.trim().toLowerCase() });
+    for (const el of [text, topic]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    const arch = h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: P.hideArchived ? true : null, onchange: (e) => setDisc({ hideArchived: e.target.checked }) }), ' Hide archived');
+    const presets = h('div', { class: 'kinds disc-presets' }, DISC_PRESETS.map(([t, l]) => h('button', { class: `kind preset${(P.topic || '') === t ? ' on' : ''}`, text: l, onclick: () => setDisc({ topic: t }) })));
+    const row = (it, i) => {
+      const fav = bookmarkOf(it.full); const local = localByRemote.get(it.full.toLowerCase());
+      return h('div', { class: 'disc-row' },
+        h('div', { class: 'disc-rank', text: `${i + 1}` }),
+        it.avatar && S.readmeImages !== false ? h('img', { class: 'disc-av', src: it.avatar, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('div', { class: 'disc-av' }),
+        h('div', { class: 'grow disc-main' },
+          h('div', { class: 'saved-top' },
+            h('button', { class: 'linkish disc-name', text: it.full, title: 'Explore it', onclick: () => openFull(it.full) }),
+            fav ? h('span', { class: 'chip ok', text: 'favorite' }) : null,
+            local ? h('span', { class: 'chip info', text: 'on this computer' }) : null,
+            it.archived ? h('span', { class: 'chip warn', text: 'archived' }) : null),
+          it.description ? h('div', { class: 'disc-desc', text: it.description }) : null,
+          h('div', { class: 'disc-meta' },
+            h('span', { class: 'disc-stars', text: `★ ${shortNum(it.stars)}`, title: `${num(it.stars)} stars` }),
+            h('span', { class: 'dim', text: `${shortNum(it.forks)} forks` }),
+            it.language ? h('span', { class: 'dim', text: it.language }) : null,
+            it.license ? h('span', { class: 'dim', text: it.license }) : null,
+            it.pushedAt ? h('span', { class: 'dim', text: `updated ${when(it.pushedAt)}` }) : null,
+            P.period !== 'all' && it.createdAt ? h('span', { class: 'dim', text: `created ${when(it.createdAt)}` }) : null,
+            ...it.topics.slice(0, 4).map((t) => h('button', { class: 'topic linkish-topic', text: t, title: `Most starred with the topic ${t}`, onclick: () => setDisc({ topic: t }) })))),
+        h('div', { class: 'saved-actions' },
+          local ? h('button', { class: 'btn btn-sm', text: 'Open', onclick: () => openRepo(local.path) }) : h('button', { class: 'btn btn-sm btn-primary', text: 'Explore', onclick: () => openFull(it.full) }),
+          h('button', { class: `btn btn-sm${fav ? ' btn-accent' : ''}`, text: fav ? '★' : '☆', title: fav ? 'Remove from favorites' : 'Add to favorites', 'aria-label': fav ? `Remove ${it.full} from favorites` : `Add ${it.full} to favorites`, onclick: async () => {
+            if (fav) await hub.saved.unsave(it.full);
+            else { const r = await hub.saved.save(it.full, { snap: { description: it.description, stars: it.stars, language: it.language, license: it.license } }); if (!r || !r.ok) { fail(r); return; } }
+            await loadSaved(); paintDiscover();
+          } }),
+          h('button', { class: 'btn btn-sm', text: S.compare.includes(it.full) ? 'In compare' : 'Compare', disabled: S.compare.includes(it.full), onclick: () => { addCompare(it.full); paintDiscover(); } })));
+    };
+    const label = DISC_PERIODS.find(([v]) => v === P.period)[1];
+    const status = D.error ? h('div', { class: 'warn-box' }, D.error, ' ', h('button', { class: 'btn btn-sm', text: 'Try again', onclick: () => runDiscover(false) }))
+      : D.items.length ? h('div', { class: 'dim', text: `Showing ${D.items.length} of ${num(D.total)}${D.totalFound > D.total ? ` (GitHub lists the top 1,000 of ${num(D.totalFound)} matches)` : ''}. Ranked by stars.` })
+        : D.loading ? null : h('div', { class: 'dim', text: 'Nothing matches. Try another language, topic or time period.' });
+    main.replaceChildren(
+      h('div', { class: 'head' },
+        h('div', { class: 'head-title' }, h('span', { class: 'head-name', text: 'Most starred on GitHub' }), h('span', { class: 'chip', text: label })),
+        h('div', { class: 'dim', text: P.period === 'all' ? 'The repositories with the most stars, from GitHub\'s own search.' : `Repositories created in this period, ranked by stars: the closest match to GitHub Trending, which has no public data feed.` }),
+        h('div', { class: 'bar wrap disc-tools' }, periodSeg, lang, arch,
+          h('span', { class: 'grow' }),
+          h('button', { class: 'btn btn-sm btn-ghost', text: 'GitHub Trending ↗', title: 'Open github.com/trending in your browser', onclick: () => hub.open.web('https://github.com/trending') })),
+        h('div', { class: 'bar wrap' }, text, topic, h('button', { class: 'btn btn-primary', text: 'Search', onclick: go }),
+          P.text || P.topic || P.language || P.period !== 'all' ? h('button', { class: 'btn btn-sm', text: 'Reset', onclick: () => { S.disc.params = { ...DISC_DEFAULT }; saveDisc(); runDiscover(true); } }) : null),
+        presets, status),
+      D.items.length ? h('div', { class: 'disc-list card' }, D.items.map(row)) : null,
+      D.loading ? h('div', { class: 'loading', text: D.items.length ? 'Loading more…' : 'Asking GitHub…' })
+        : D.hasMore && !D.error ? h('div', { class: 'bar center' }, h('button', { class: 'btn', text: `Show ${Math.min(30, D.total - D.items.length)} more`, onclick: () => runDiscover(false) })) : null);
+  }
+  let DISC_LANGS = ['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust', 'Java', 'C++', 'C', 'C#', 'Kotlin', 'Swift', 'PHP', 'Ruby', 'Shell', 'Jupyter Notebook', 'HTML', 'Dart', 'Lua', 'Zig'];
+
+  /* ---------- the search box: suggestions from favorites, history and this computer ---------- */
+  let sugg = { items: [], ix: -1 };
+  function hideSuggest() { const el = $('explore-suggest'); if (el) el.hidden = true; sugg = { items: [], ix: -1 }; }
+  function buildSuggest() {
+    const input = $('explore-input'); const el = $('explore-suggest');
+    if (!input || !el || document.activeElement !== input) return;
+    const q = input.value.trim().toLowerCase().replace(/^https?:\/\/(www\.)?github\.com\//, '').replace(/\.git$/, '');
+    const match = (t) => !q || String(t || '').toLowerCase().includes(q);
+    const items = [];
+    const localFav = S.repos.filter((r) => r.favorite && match(`${r.name} ${(st(r.path) || {}).remote || ''}`)).slice(0, 4);
+    for (const r of localFav) items.push({ kind: 'local', icon: '★', label: r.name, sub: 'favorite on this computer', run: () => { hideSuggest(); openRepo(r.path); } });
+    for (const b of S.saved.bookmarks.filter((b) => match(`${b.full} ${(b.snap && b.snap.description) || ''} ${(b.tags || []).join(' ')}`)).slice(0, 5)) items.push({ kind: 'fav', icon: '★', label: b.full, sub: (b.snap && b.snap.description) || 'favorite', run: () => openFull(b.full) });
+    const favSet = new Set(S.saved.bookmarks.map((b) => b.full.toLowerCase()));
+    for (const x of S.saved.history.filter((x) => !favSet.has(x.full.toLowerCase()) && match(`${x.full} ${x.description || ''} ${x.query || ''}`)).slice(0, q ? 8 : 6)) items.push({ kind: 'recent', icon: '↺', label: x.full, sub: [x.description, when(x.at)].filter(Boolean).join(' · '), full: x.full, run: () => openFull(x.full) });
+    if (q) for (const r of S.repos.filter((r) => !r.favorite && match(r.name)).slice(0, 3)) items.push({ kind: 'local', icon: '▣', label: r.name, sub: 'on this computer', run: () => { hideSuggest(); openRepo(r.path); } });
+    if (!items.length && !S.saved.history.length) { el.hidden = true; return; }
+    sugg = { items, ix: Math.min(sugg.ix, items.length - 1) };
+    const head = (t) => h('div', { class: 'sugg-head', text: t });
+    const kids = []; let lastKind = '';
+    const KIND = { local: 'On this computer', fav: 'Favorites', recent: 'Recent searches' };
+    items.forEach((it, i) => {
+      const k = it.kind === 'local' && it.icon === '★' ? 'favlocal' : it.kind;
+      if (k !== lastKind) { kids.push(head(k === 'favlocal' ? 'Favorites on this computer' : KIND[it.kind])); lastKind = k; }
+      kids.push(h('div', { class: `sugg-item${i === sugg.ix ? ' on' : ''}`, role: 'option', 'aria-selected': i === sugg.ix ? 'true' : 'false', onmousedown: (e) => { e.preventDefault(); it.run(); } },
+        h('span', { class: `sugg-icon ${it.kind}${it.icon === '★' ? ' fav' : ''}`, text: it.icon }),
+        h('div', { class: 'grow sugg-text' }, h('div', { class: 'sugg-label', text: it.label }), it.sub ? h('div', { class: 'dim sugg-sub', text: it.sub }) : null),
+        it.kind === 'recent' ? h('span', { class: 'icon-btn sugg-x', role: 'button', text: '✕', title: 'Remove from history', onmousedown: async (e) => { e.preventDefault(); e.stopPropagation(); await forgetHistory(it.full); buildSuggest(); } }) : null));
+    });
+    if (!items.length) kids.push(h('div', { class: 'dim sugg-empty', text: 'Press Enter to explore it.' }));
+    kids.push(h('div', { class: 'sugg-foot' },
+      h('span', { class: 'linkish', text: `Search history (${S.saved.history.length})`, onmousedown: (e) => { e.preventDefault(); hideSuggest(); input.blur(); showHistory(); } }),
+      h('span', { class: 'linkish', text: '★ Favorites', onmousedown: (e) => { e.preventDefault(); hideSuggest(); input.blur(); showSaved(); } }),
+      h('span', { class: 'grow' }),
+      S.saved.history.length ? h('span', { class: 'linkish', text: 'Clear history', onmousedown: (e) => { e.preventDefault(); hideSuggest(); input.blur(); clearAllHistory(); } }) : null));
+    el.replaceChildren(...kids);
+    el.hidden = false;
+  }
+
+  async function toggleCurrentFavorite() {
+    if (S.sel && S.sel.type === 'repo') { const r = repoByPath(S.sel.path); if (r) toggleFavorite(r); return; }
+    if (S.sel && S.sel.type === 'explore' && S.sel.data && S.sel.data.ok) {
+      const d = S.sel.data;
+      if (bookmarkOf(d.fullName)) { await hub.saved.unsave(d.fullName); toast(`${d.fullName} removed from favorites.`, 2500, 'good'); }
+      else { const r = await hub.saved.save(d.fullName, { snap: { description: d.description, stars: d.stars, language: d.languages[0] && d.languages[0].name, license: d.license } }); if (!r || !r.ok) { fail(r); return; } toast(`${d.fullName} added to favorites.`, 2500, 'good'); }
+      await loadSaved(); paintMain(); return;
+    }
+    toast('Open a repository first, then press Ctrl+D.', 3000);
   }
 
   function renameCollection(col) {
@@ -1284,7 +1688,80 @@
     root.style.setProperty('--reading', st.readingFont);
     root.style.setProperty('--mono', st.codeFont);
     S.readmeImages = st.readmeImages;
+    if (st.librarySort && st.librarySort !== S.sort) { S.sort = st.librarySort; const el = document.getElementById('sort'); if (el) el.value = S.sort; if (S.repos.length) paintList(); }
+    applyLayout();
   }
+
+  /* ---------- movable separators ----------
+     Two separators: between the repository list and the main area, and (when
+     Settings is pinned) between the main area and Settings. Drag, or focus one
+     and use the arrow keys; double-click puts it back. Widths are saved in
+     settings (sidebarWidth, dockWidth), and the main area always keeps at
+     least MIN_MAIN pixels, so a narrow window shrinks the side panes for the
+     moment without changing what is saved. */
+  const MIN_MAIN = 380;
+  const drag = { side: null, dock: null };
+  function layoutWidths() {
+    const W = window.innerWidth || 1400;
+    const pinned = document.body.classList.contains('settings-pinned');
+    const st2 = S.settings || {};
+    let dock = pinned ? (drag.dock != null ? drag.dock : (st2.dockWidth || 480)) : 0;
+    let side = drag.side != null ? drag.side : (st2.sidebarWidth || 340);
+    side = Math.max(220, Math.min(side, W - dock - MIN_MAIN));
+    if (pinned) dock = Math.max(320, Math.min(dock, W - side - MIN_MAIN));
+    return { side: Math.max(180, side), dock: Math.max(0, dock) };
+  }
+  function applyLayout() {
+    const lay = document.querySelector('.layout');
+    if (!lay) return;
+    const w = layoutWidths();
+    lay.style.setProperty('--side-w', `${w.side}px`);
+    lay.style.setProperty('--dock-w', `${w.dock}px`);
+  }
+  function wireSplitter(el, which) {
+    if (!el) return;
+    const key = which === 'side' ? 'sidebarWidth' : 'dockWidth';
+    const def = which === 'side' ? 340 : 480;
+    const dir = which === 'side' ? 1 : -1;
+    const save = (w) => { drag[which] = null; setSetting({ [key]: Math.round(w) }); };
+    let start = null;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      start = { x: e.clientX, w: layoutWidths()[which] };
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging'); document.body.classList.add('resizing');
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      drag[which] = start.w + dir * (e.clientX - start.x);
+      applyLayout();
+    });
+    const end = (e) => {
+      if (!start) return;
+      start = null;
+      try { el.releasePointerCapture(e.pointerId); } catch { /* released */ }
+      el.classList.remove('dragging'); document.body.classList.remove('resizing');
+      const w = layoutWidths()[which];
+      save(w);
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('dblclick', () => { drag[which] = null; setSetting({ [key]: def }); });
+    el.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 64 : 16;
+      const cur = layoutWidths()[which];
+      let next = null;
+      if (e.key === 'ArrowLeft') next = cur - dir * step;
+      else if (e.key === 'ArrowRight') next = cur + dir * step;
+      else if (e.key === 'Home') next = def;
+      if (next == null) return;
+      e.preventDefault();
+      drag[which] = next; applyLayout();
+      save(layoutWidths()[which]);
+    });
+  }
+  window.addEventListener('resize', () => applyLayout());
 
   /* ---------- settings panel ---------- */
   let settingsSection = '';
@@ -1295,6 +1772,7 @@
     dock.hidden = false;
     document.body.classList.toggle('settings-pinned', (S.settings || {}).settingsMode === 'pinned');
     document.body.classList.toggle('settings-overlay', (S.settings || {}).settingsMode !== 'pinned');
+    applyLayout();
     renderSettings();
     const q = dock.querySelector('.set-search'); if (q) q.focus();
   }
@@ -1302,6 +1780,7 @@
     if (IS_SETTINGS_WINDOW) { window.close(); return; }
     $('settings-dock').hidden = true;
     document.body.classList.remove('settings-pinned', 'settings-overlay');
+    applyLayout();
   }
   const settingsOpen = () => IS_SETTINGS_WINDOW || !$('settings-dock').hidden;
 
@@ -1378,7 +1857,8 @@
 
     // Start and folders
     const startSec = sec('start', 'Start and folders',
-      row('When RepoHub opens', 'What the right side shows first.', seg('startView', [['welcome', 'Welcome'], ['grid', 'Repository grid'], ['saved', 'Saved'], ['last', 'Last repository']]), 'startup open'));
+      row('When RepoHub opens', 'What the right side shows first.', seg('startView', [['welcome', 'Welcome'], ['grid', 'Repository grid'], ['saved', 'Favorites'], ['last', 'Last repository']]), 'startup open'),
+      row('Favorites first', 'Keep starred repositories at the top of the list and the grid, whatever the sort.', toggle('favoritesFirst'), 'favorites star pinned top order'));
     body.append(startSec);
     (async () => {
       const [cfg, clone] = await Promise.all([hub.repos.settings(), hub.app.defaultCloneDir()]);
@@ -1413,32 +1893,50 @@
       acct.append(
         row('Git identity', 'Your name and email on commits. Saved in Git\'s own settings.', h('div', { class: 'bar tight wrap' }, name, email,
           h('button', { class: 'btn btn-sm', text: 'Save', onclick: async () => { const r = await hub.tools.setIdentity(name.value, email.value); if (r && r.ok) toast('Git identity saved.', 4000, 'good'); else fail(r); } })), 'git login name email commit'),
-        row('GitHub', 'Raises GitHub\'s limit to 5,000 requests an hour and opens private repositories.', loginSection(), 'github login gh sign in'));
+        row('Git sign-in', 'The GitHub login Git uses to clone, pull and push. Signing in happens in Git Credential Manager\'s browser window; RepoHub never sees your password.', gitSignInSection(), 'git login sign in credential manager gcm github account sign out'),
+        row('Connect RepoHub to GitHub', 'For RepoHub\'s own GitHub requests: 5,000 an hour instead of 60, star history and private repositories.', loginSection(), 'github login gh sign in connect connector token'));
       const agentsEl = h('div', { class: 'agents' }, h('div', { class: 'dim', text: 'Checking which agents are installed…' }));
-      acct.append(row('Coding agents', 'Sign-in happens in each agent\'s own window; RepoHub never sees the password. The status below shows installation; agent account sessions are not verified by RepoHub.', agentsEl, 'agent login chatgpt codex claude gemini copilot openai google'));
+      const provEl = h('div', { class: 'agents' });
+      acct.append(
+        row('AI agents and models', 'Sign-in happens in each agent\'s own window or browser page; RepoHub never sees the password or key. The dot shows whether the agent is installed; RepoHub does not check whether its account is signed in.', agentsEl, 'agent login sign in chatgpt codex claude gemini copilot openai google qwen alibaba kimi moonshot ollama opencode kilo cline factory droid mistral vibe'),
+        row('Model providers without a sign-in program', 'These providers only offer API keys on Windows. RepoHub opens their key page; you paste the key into an agent that supports them, which keeps it.', provEl, 'deepseek perplexity grok xai api key provider'));
+      const paintAgents = (data) => {
+        const agents = data.tools.filter((x) => x.group === 'agent');
+        agentsEl.replaceChildren(...agents.map((t) => h('div', { class: 'agent' },
+          h('span', { class: `dot ${t.version ? 'ok' : 'bad'}` }),
+          h('div', { class: 'grow' },
+            h('div', { class: 'agent-name', text: t.signIn ? t.signIn.label : t.name }),
+            h('div', { class: 'dim', text: t.version ? `${t.name} · ${t.version}` : `${t.name} is not installed` }),
+            t.signIn ? h('div', { class: 'dim', text: t.signIn.hint }) : null,
+            t.note ? h('div', { class: 'dim inst-note', text: t.note }) : null),
+          h('div', { class: 'agent-actions' },
+            t.version && t.signIn ? h('button', { class: 'btn btn-sm', text: 'Sign in', title: `Opens a terminal running: ${t.signIn.command}`, onclick: () => hub.installers.signIn(t.id).then((x) => x && !x.ok && fail(x)) }) : null,
+            t.version && t.signOut ? h('button', { class: 'btn btn-sm btn-ghost', text: 'Sign out', onclick: () => hub.installers.signOut(t.id).then((x) => x && !x.ok && fail(x)) }) : null,
+            !t.version && t.canInstall ? h('button', { class: 'btn btn-sm btn-primary', text: 'Install', title: t.command, onclick: () => runInstall([t.id]) }) : null))));
+        provEl.replaceChildren(...(data.providers || []).map((p) => {
+          const ready = p.via.find((v) => v.installed);
+          return h('div', { class: 'agent' },
+            h('span', { class: 'dot' }),
+            h('div', { class: 'grow' }, h('div', { class: 'agent-name', text: p.name }), h('div', { class: 'dim', text: p.note })),
+            h('div', { class: 'agent-actions' },
+              h('button', { class: 'btn btn-sm', text: 'Get an API key', title: p.keyUrl, onclick: () => hub.installers.providerKey(p.id).then((x) => x && !x.ok && fail(x)) }),
+              ready ? h('button', { class: 'btn btn-sm', text: `Add it in ${ready.name}`, onclick: () => hub.installers.signIn(ready.id).then((x) => x && !x.ok && fail(x)) })
+                : p.via.length ? h('button', { class: 'btn btn-sm btn-primary', text: `Install ${p.via[0].name}`, onclick: () => runInstall([p.via[0].id]) }) : null));
+        }));
+      };
       const data = installState || await hub.installers.check();
       installState = data;
-      const AG = ['claude', 'codex', 'gemini', 'copilot'];
-      agentsEl.replaceChildren(...AG.map((id) => {
-        const t = data.tools.find((x) => x.id === id);
-        if (!t) return null;
-        return h('div', { class: 'agent' },
-          h('span', { class: `dot ${t.version ? 'ok' : 'bad'}` }),
-          h('div', { class: 'grow' }, h('div', { class: 'agent-name', text: t.signIn ? t.signIn.label : t.name }), h('div', { class: 'dim', text: t.version ? `${t.name} · ${t.version}` : `${t.name} is not installed` }), t.signIn ? h('div', { class: 'dim', text: t.signIn.hint }) : null),
-          t.version
-            ? h('button', { class: 'btn btn-sm', text: 'Sign in', onclick: () => hub.installers.signIn(id).then((x) => x && !x.ok && fail(x)) })
-            : h('button', { class: 'btn btn-sm btn-primary', text: 'Install', onclick: () => runInstall([id]) }));
-      }));
+      paintAgents(data);
       filterRows();
     })();
 
     // Installers
-    const inst = sec('installers', 'Installers', h('div', { class: 'set-desc', text: 'Everything the repositories you try may need. Installs run in a visible window with the official installers (winget, built into Windows, or npm). You answer the license and administrator prompts yourself.' }));
+    const inst = sec('installers', 'Installers', h('div', { class: 'set-desc', text: 'Everything the repositories you try may need. Installs run in a visible window with the official installers (winget, built into Windows, npm, or uv for Python tools). You answer the license and administrator prompts yourself.' }));
     body.append(inst);
     const instList = h('div', { class: 'inst-list' }, h('div', { class: 'dim', text: 'Checking what is installed…' }));
     inst.append(instList);
     const paintInstallers = (data) => {
-      const GROUPS = [['runtime', 'Languages and runtimes'], ['package', 'Package managers'], ['container', 'Containers'], ['tool', 'Tools'], ['agent', 'Coding agents']];
+      const GROUPS = [['runtime', 'Languages and runtimes'], ['package', 'Package managers'], ['container', 'Containers'], ['tool', 'Tools'], ['agent', 'AI agents and models']];
       const missing = data.tools.filter((t) => !t.version && t.canInstall);
       instList.replaceChildren(
         data.windows && !data.winget ? h('div', { class: 'warn-box', text: 'winget (Windows Package Manager) was not found. Install "App Installer" from the Microsoft Store, then press Check again.' }) : null,
@@ -1468,10 +1966,11 @@
       row('Strict sandboxes', 'Read-only system files inside the sandbox. Safer, but many installs fail; turn on for repositories you distrust.', toggle('sandboxReadOnly'), 'read-only filesystem'),
       row('Show images in READMEs', 'Images load from the internet, which tells those servers your address. Off shows a placeholder.', toggle('readmeImages'), 'privacy remote images'),
       row('Confirm before installing', 'Show the exact commands before an installer window opens.', toggle('confirmInstalls'), 'install prompt'),
-      row('Clear saved data', 'Health evidence, Claude summaries or recently viewed. Saved repositories and settings stay.', h('div', { class: 'bar tight wrap' },
+      row('Keep search history', 'Remember the repositories you explore, for suggestions in the search box and the Search history page. Stays on this computer.', toggle('keepHistory'), 'history privacy recent searches'),
+      row('Clear saved data', 'Health evidence, Claude summaries or search history. Favorites and settings stay.', h('div', { class: 'bar tight wrap' },
         h('button', { class: 'btn btn-sm', text: 'Clear health evidence', onclick: async () => { await hub.settings.clearData('cache'); toast('Health evidence cleared.', 3000, 'good'); } }),
         h('button', { class: 'btn btn-sm', text: 'Clear summaries', onclick: async () => { await hub.settings.clearData('summaries'); toast('Summaries cleared.', 3000, 'good'); } }),
-        h('button', { class: 'btn btn-sm', text: 'Clear recently viewed', onclick: async () => { await hub.settings.clearData('history'); await loadSaved(); toast('Recently viewed cleared.', 3000, 'good'); } })), 'cache privacy delete')));
+        h('button', { class: 'btn btn-sm', text: 'Clear search history', onclick: async () => { await hub.settings.clearData('history'); await loadSaved(); toast('Search history cleared.', 3000, 'good'); } })), 'cache privacy delete')));
 
     // Shortcuts
     body.append(sec('shortcuts', 'Shortcuts',
@@ -1524,11 +2023,17 @@
     ['Ctrl+,', 'Settings'],
     ['Ctrl+L', 'Paste a link (focus the Explore box)'],
     ['Ctrl+G', 'Repository grid'],
+    ['Ctrl+D', 'Add or remove the open repository from favorites'],
+    ['Ctrl+H', 'Search history'],
+    ['Ctrl+T', 'Most starred on GitHub'],
+    ['Ctrl+Shift+S', 'Favorites'],
+    ['↑ ↓ Enter', 'In the search box: pick a favorite or a recent search'],
     ['Ctrl+Shift+F', 'Fetch all'],
     ['Ctrl+Shift+U', 'Update all', 'Pulls every clean repository that is behind GitHub'],
     ['Ctrl+Shift+C', 'Copy selected text in a log or code view'],
     ['Ctrl+Shift+V', 'Paste into the focused box'],
     ['Right-click', 'In a log or code view: copies the selected text'],
+    ['Drag a separator', 'Resize the repository list or pinned Settings; arrow keys when it has focus, double-click to reset'],
     ['F5', 'Reload the window', 'For page edits (renderer.js, styles.css, index.html). Running jobs and sandboxes keep running.'],
     ['Ctrl+Shift+R', 'Full relaunch', 'Use after editing main.js or preload.js'],
     ['F12', 'Toggle DevTools'],
@@ -1543,13 +2048,30 @@
       ['Update all', 'Ctrl+Shift+U', () => updateAll()],
       ['Refresh repository status', '', () => refreshAll()],
       ['Rescan folders for repositories', '', () => rescan()],
-      ['Saved repositories', '', () => showSaved()],
+      ['Favorites', 'Ctrl+Shift+S', () => showSaved()],
+      ['Search history', 'Ctrl+H', () => showHistory()],
+      ['Most starred on GitHub', 'Ctrl+T', () => showDiscover()],
+      ...DISC_PERIODS.slice(1).map(([v, l]) => [`Most starred: ${l.toLowerCase()}`, '', () => { S.disc.params.period = v; saveDisc(); S.disc.key = ''; showDiscover(); runDiscover(true); }]),
+      ...DISC_PRESETS.slice(1).map(([t, l]) => [`Most starred: ${l}`, '', () => { S.disc.params.topic = t; saveDisc(); S.disc.key = ''; showDiscover(); runDiscover(true); }]),
+      ['Add or remove favorite', 'Ctrl+D', () => toggleCurrentFavorite()],
+      ['Show only favorites in the list', '', () => { S.view = 'favorites'; $('view').value = 'favorites'; paintList(); }],
+      ['Clear search history', '', () => clearAllHistory()],
+      ...S.saved.history.slice(0, 15).map((x) => [`Recent: ${x.full}`, '', () => openFull(x.full)]),
       ['Compare', '', () => showCompare()],
       ['Sandboxes', '', () => showSandboxes()],
       ['Settings', 'Ctrl+,', () => openSettings()],
       ...SECTIONS.map(([id, label]) => [`Settings: ${label}`, '', () => openSettings(id)]),
       ['Install tools', '', () => openSettings('installers')],
       ['Sign in to GitHub', '', () => openSettings('accounts')],
+      ['Sign in to Git (Git Credential Manager)', '', () => openSettings('accounts')],
+      ...SORTS.map(([v, l]) => [`Sort the list: ${l}`, '', () => setSort(v)]),
+      ['Reset the list width', '', () => setSetting({ sidebarWidth: 340 })],
+      ...(() => {
+        const full = S.sel && S.sel.type === 'explore' && S.sel.data ? S.sel.data.fullName
+          : S.sel && S.sel.type === 'repo' ? (webOf(st(S.sel.path)).match(/^https:\/\/github\.com\/([^/]+\/[^/]+)$/i) || [])[1] : '';
+        return full ? [['GitIngest', 'gitingest.com'], ['GitDiagram', 'gitdiagram.com'], ['DeepWiki', 'deepwiki.com'], ['GitMCP', 'gitmcp.io']].map(([n], i) => [`Open ${full} in ${n}`, '', () => hub.aitools.open(['gitingest', 'gitdiagram', 'deepwiki', 'gitmcp'][i], full)]) : [];
+      })(),
+      ['AI agent sign-ins', '', () => openSettings('accounts')],
       ['Switch to day', '', () => setSetting({ themeMode: 'day' })],
       ['Switch to night', '', () => setSetting({ themeMode: 'night' })],
       ['Follow Windows day or night', '', () => setSetting({ themeMode: 'system' })],
@@ -1560,7 +2082,7 @@
       ['Toggle DevTools', 'F12', () => hub.appControl.devtools()],
     ];
     for (const r of S.repos.filter((x) => !x.hidden)) A.push([`Open repository: ${r.name}`, '', () => openRepo(r.path), r.path]);
-    for (const b of S.saved.bookmarks) A.push([`Explore saved: ${b.full}`, '', () => { $('explore-input').value = `https://github.com/${b.full}`; explore(b.full); }]);
+    for (const b of S.saved.bookmarks) A.push([`Favorite: ${b.full}`, '', () => { $('explore-input').value = `https://github.com/${b.full}`; explore(b.full); }]);
     return A;
   }
 
@@ -1601,6 +2123,10 @@
     if (IS_SETTINGS_WINDOW) { if (k === 'escape') window.close(); return; }
     if (e.ctrlKey && !e.shiftKey && k === 'l') { e.preventDefault(); $('explore-input').focus(); $('explore-input').select(); return; }
     if (e.ctrlKey && !e.shiftKey && k === 'g') { e.preventDefault(); showGrid(); return; }
+    if (e.ctrlKey && !e.shiftKey && k === 'd') { e.preventDefault(); toggleCurrentFavorite(); return; }
+    if (e.ctrlKey && !e.shiftKey && k === 'h') { e.preventDefault(); showHistory(); return; }
+    if (e.ctrlKey && !e.shiftKey && k === 't') { e.preventDefault(); showDiscover(); return; }
+    if (e.ctrlKey && e.shiftKey && k === 's') { e.preventDefault(); showSaved(); return; }
     if (e.ctrlKey && e.shiftKey && k === 'f') { e.preventDefault(); fetchAll(); return; }
     if (e.ctrlKey && e.shiftKey && k === 'u') { e.preventDefault(); updateAll(); return; }
     if (e.ctrlKey && e.shiftKey && k === 'c') { const t = String(window.getSelection() || ''); if (t) { e.preventDefault(); copyText(t); } return; }
@@ -1626,23 +2152,23 @@
   });
 
   /* ---------- repository grid ---------- */
-  function showGrid() { S.sel = { type: 'grid', q: (S.sel && S.sel.type === 'grid' && S.sel.q) || '', sort: (S.sel && S.sel.sort) || 'recent' }; paintList(); paintMain(); }
+  function showGrid() { S.sel = { type: 'grid', q: (S.sel && S.sel.type === 'grid' && S.sel.q) || '', sort: (S.sel && S.sel.type === 'grid' && S.sel.sort) || S.sort || 'recent' }; paintList(); paintMain(); }
   function paintGrid() {
     const V = S.sel;
     const q = (V.q || '').toLowerCase();
-    let rows = S.repos.filter((r) => (!r.hidden || S.showHidden) && (!q || `${r.name} ${r.path} ${(st(r.path) || {}).remote || ''}`.toLowerCase().includes(q)));
-    const att = (r) => { const s2 = st(r.path); return s2 && s2.ok ? (s2.conflicts ? 100 : 0) + (s2.locked ? 50 : 0) + s2.changed + s2.ahead * 2 + s2.behind * 3 : -1; };
-    rows.sort((a, b) => V.sort === 'name' ? a.name.localeCompare(b.name) : V.sort === 'attention' ? att(b) - att(a) : String((st(b.path) || {}).lastDate || '').localeCompare(String((st(a.path) || {}).lastDate || '')));
+    const rows0 = sortRows(S.repos.filter((r) => (!r.hidden || S.showHidden) && (!q || `${r.name} ${r.path} ${(st(r.path) || {}).remote || ''} ${(catOf(r) || {}).label || ''}`.toLowerCase().includes(q))), V.sort);
+    const rows = V.sort === 'category' ? rows0 : withFavoritesFirst(rows0);
     const filter = h('input', { class: 'input grow', type: 'search', placeholder: 'Filter repositories', value: V.q || '' });
     filter.addEventListener('input', () => { V.q = filter.value; const pos = filter.selectionStart; paintGrid(); const f2 = main.querySelector('.grid-tools input'); if (f2) { f2.focus(); f2.setSelectionRange(pos, pos); } });
-    const sort = h('select', { class: 'input', onchange: (e) => { V.sort = e.target.value; paintGrid(); } }, h('option', { value: 'recent', text: 'Most recent' }), h('option', { value: 'attention', text: 'Needs attention first' }), h('option', { value: 'name', text: 'Name' }));
+    const sort = h('select', { class: 'input', title: 'Sort', onchange: (e) => { V.sort = e.target.value; paintGrid(); } }, SORTS.map(([v, l]) => h('option', { value: v, text: l })));
     sort.value = V.sort;
     const card = (r) => {
       const s2 = st(r.path);
       const busy = S.busy.has(r.path);
       return h('div', { class: `repo-card${r.hidden ? ' hidden-repo' : ''}` },
-        h('div', { class: 'rc-top' }, h('button', { class: 'linkish rc-name', text: r.name, title: r.path, onclick: () => openRepo(r.path) }), busy ? h('span', { class: 'spin', text: '⟳' }) : null),
+        h('div', { class: 'rc-top' }, h('button', { class: `icon-btn star-btn${r.favorite ? ' on' : ''}`, text: r.favorite ? '★' : '☆', title: r.favorite ? 'Remove from favorites' : 'Add to favorites', 'aria-pressed': r.favorite ? 'true' : 'false', onclick: () => toggleFavorite(r) }), h('button', { class: 'linkish rc-name', text: r.name, title: r.path, onclick: () => openRepo(r.path) }), busy ? h('span', { class: 'spin', text: '⟳' }) : null),
         h('div', { class: 'dim mono rc-sub', text: [ownerOf(s2 && s2.remote), s2 && s2.branch].filter(Boolean).join(' · ') || 'local' }),
+        catOf(r) && V.sort !== 'category' ? h('div', { class: 'row-cat rc-cat', text: catOf(r).label, title: catOf(r).why }) : null,
         h('div', { class: 'rc-chips' }, ...chips(s2, r)),
         h('div', { class: 'dim rc-last', text: s2 && s2.lastMessage ? `${s2.lastDate} · ${s2.lastMessage}` : s2 && s2.noCommits ? 'no commits yet' : '' }),
         h('div', { class: 'rc-actions' },
@@ -1657,7 +2183,11 @@
           h('button', { class: 'btn btn-sm', text: 'Refresh', onclick: () => refreshAll().then(() => S.sel.type === 'grid' && paintGrid()) }),
           h('button', { class: 'btn btn-sm', text: 'Fetch all', onclick: () => fetchAll().then(() => S.sel.type === 'grid' && paintGrid()) }),
           h('button', { class: 'btn btn-sm btn-primary', text: 'Update all', onclick: () => updateAll() }))),
-      rows.length ? h('div', { class: 'repo-grid' }, rows.map(card)) : section('', h('div', { class: 'dim', text: 'No repositories match.' })));
+      !rows.length ? section('', h('div', { class: 'dim', text: 'No repositories match.' }))
+        : V.sort === 'category' ? h('div', { class: 'grid-groups' }, groupByCategory(rows).map((g) => h('section', { class: 'grid-group' },
+          h('div', { class: 'grid-group-head' }, h('span', { text: g.label }), h('span', { class: 'count', text: String(g.rows.length) })),
+          h('div', { class: 'repo-grid' }, g.rows.map(card)))))
+          : h('div', { class: 'repo-grid' }, rows.map(card)));
   }
 
   /* ---------- update all ---------- */
@@ -1711,6 +2241,8 @@
     else if (S.sel.type === 'sandbox') paintSandbox();
     else if (S.sel.type === 'sandboxes') showSandboxes();
     else if (S.sel.type === 'saved') paintSaved();
+    else if (S.sel.type === 'history') paintHistory();
+    else if (S.sel.type === 'discover') paintDiscover();
     else if (S.sel.type === 'compare') paintCompare();
     else if (S.sel.type === 'grid') paintGrid();
     else paintRepo();
@@ -1740,7 +2272,22 @@
   });
 
   /* ---------- wiring ---------- */
-  $('explore-form').addEventListener('submit', (e) => { e.preventDefault(); explore($('explore-input').value); });
+  $('explore-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (sugg.ix >= 0 && sugg.items[sugg.ix]) { sugg.items[sugg.ix].run(); return; }
+    hideSuggest(); explore($('explore-input').value);
+  });
+  $('explore-input').addEventListener('focus', () => { sugg.ix = -1; buildSuggest(); });
+  $('explore-input').addEventListener('input', () => { sugg.ix = -1; buildSuggest(); });
+  $('explore-input').addEventListener('blur', () => setTimeout(hideSuggest, 120));
+  $('explore-input').addEventListener('keydown', (e) => {
+    const el = $('explore-suggest');
+    if (e.key === 'Escape') { if (el && !el.hidden) { e.preventDefault(); e.stopPropagation(); hideSuggest(); } return; }
+    if (!el || el.hidden || !sugg.items.length) { if (e.key === 'ArrowDown') { buildSuggest(); } return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); sugg.ix = (sugg.ix + 1) % sugg.items.length; buildSuggest(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sugg.ix = sugg.ix <= 0 ? sugg.items.length - 1 : sugg.ix - 1; buildSuggest(); }
+    else if (e.key === 'Delete' && sugg.ix >= 0 && sugg.items[sugg.ix].kind === 'recent') { e.preventDefault(); forgetHistory(sugg.items[sugg.ix].full).then(buildSuggest); }
+  });
   $('explore-input').addEventListener('paste', () => setTimeout(() => { const v = $('explore-input').value.trim(); if (/github\.com\//i.test(v)) explore(v); }, 0));
 
   $('refresh-btn').addEventListener('click', refreshAll);
@@ -1785,6 +2332,11 @@
     $('palette-btn').addEventListener('click', openPalette);
     $('grid-btn').addEventListener('click', showGrid);
     $('update-btn').addEventListener('click', updateAll);
+    const sortEl = $('sort');
+    if (sortEl) { sortEl.replaceChildren(...SORTS.map(([v, l, short]) => h('option', { value: v, text: short, title: l }))); sortEl.value = S.sort; sortEl.addEventListener('change', (e) => setSort(e.target.value)); }
+    wireSplitter($('side-split'), 'side');
+    wireSplitter($('dock-split'), 'dock');
+    applyLayout();
     paintMain();
     try { const cfg = await hub.repos.settings(); S.owner = (cfg && cfg.owner) || ''; } catch { /* default */ }
     const running = await hub.job.running().catch(() => null);
@@ -1794,11 +2346,13 @@
     hub.auth.onChanged(() => refreshAuth());
     loadSaved().catch(() => {});
     $('saved-btn').addEventListener('click', showSaved);
+    $('history-btn').addEventListener('click', showHistory);
+    $('discover-btn').addEventListener('click', showDiscover);
     $('compare-btn').addEventListener('click', showCompare);
     $('auth-chip').addEventListener('click', () => openSettings('accounts'));
     $('sandboxes-btn').addEventListener('click', showSandboxes);
     const c = await hub.repos.cached().catch(() => null);
-    if (c && c.ok && c.repos.length) { S.repos = c.repos; paintList(); await refreshAll(); } else await rescan();
+    if (c && c.ok && c.repos.length) { S.repos = c.repos; paintList(); loadCategories().catch(() => {}); await refreshAll(); } else await rescan();
     const sv = (S.settings || {}).startView;
     if (!S.sel) {
       if (sv === 'grid') showGrid();

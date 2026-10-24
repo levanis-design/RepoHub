@@ -23,6 +23,10 @@ const saved = require('../collections');
 const settings = require('../settings');
 const installers = require('../installers');
 const tooling = require('../tooling');
+const cats = require('../categories');
+const gitauth = require('../gitauth');
+const aitools = require('../aitools');
+const discover = require('../discover');
 
 let failed = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${msg}`); if (!cond) failed += 1; };
@@ -227,6 +231,125 @@ const w = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.wri
     const ex2 = require('../explain');
     ok(ex2.prompt({ style: 'technical', words: 400 }).includes('experienced developer') && ex2.prompt({ words: 9999 }).includes('under 600 words'), 'writing style and length in the prompt');
     ok(!ex2.prompt().includes('"'), 'prompt has no quotation marks (safe on Windows)');
+
+    // ---------- v1.5: categories ----------
+    const mk = (name, files) => { const d = path.join(T, 'cat-' + name); fs.mkdirSync(d, { recursive: true }); for (const [f, body] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true }); fs.writeFileSync(path.join(d, f), body); } return d; };
+    const cases = [
+      ['skill', { 'SKILL.md': '---\nname: x\n---' }, 'skills'],
+      ['electron', { 'package.json': JSON.stringify({ devDependencies: { electron: '44' } }) }, 'desktop'],
+      ['next', { 'package.json': JSON.stringify({ dependencies: { next: '15', react: '19' } }) }, 'web'],
+      ['express', { 'package.json': JSON.stringify({ dependencies: { express: '5' } }) }, 'server'],
+      ['mcp', { 'package.json': JSON.stringify({ dependencies: { '@modelcontextprotocol/sdk': '1' } }), 'README.md': 'An MCP server for things' }, 'mcp'],
+      ['agent', { 'pyproject.toml': '[project]\ndependencies = ["anthropic>=0.40", "rich"]' }, 'agents'],
+      ['cli', { 'package.json': JSON.stringify({ name: 'x', bin: { x: 'cli.js' } }) }, 'cli'],
+      ['data', { 'requirements.txt': 'pandas==2.2\nmatplotlib' }, 'data'],
+      ['notes', { 'README.md': '# notes', 'plan.docx': 'x' }, 'docs'],
+      ['wp', { 'style.css': '/*\nTheme Name: Twenty\n*/' }, 'web'],
+      ['video', { 'package.json': JSON.stringify({ dependencies: { remotion: '4' } }) }, 'media'],
+    ];
+    for (const [name, files, want] of cases) {
+      const got = cats.classify(mk(name, files));
+      ok(got.id === want && got.label && got.why, `category ${name} → ${got.id} (${got.why})`);
+    }
+    const dWeb = mk('override', { 'package.json': JSON.stringify({ dependencies: { react: '19' } }) });
+    const fr = cats.forRepos([dWeb], { [dWeb.toUpperCase()]: 'docs' });
+    ok(process.platform !== 'win32' || (fr[dWeb].id === 'docs' && fr[dWeb].mine), 'your own category wins (case-insensitive path on Windows)');
+    ok(cats.forRepos([dWeb], { [dWeb]: 'bogus' })[dWeb].id === 'web', 'unknown chosen category falls back to the guess');
+    const outside = path.join(T, 'outside-secret.txt'); fs.writeFileSync(outside, '{"dependencies":{"electron":"1"}}');
+    const dLink = mk('link', {});
+    let linked = false; try { fs.symlinkSync(outside, path.join(dLink, 'package.json')); linked = true; } catch { /* no symlink rights */ }
+    ok(!linked || cats.classify(dLink).id !== 'desktop', 'a link pointing outside the repository is not read');
+    ok(settings.write({ librarySort: 'category', sidebarWidth: 420, dockWidth: 520 }).ok && !settings.write({ librarySort: 'bogus' }).ok && !settings.write({ sidebarWidth: 50 }).ok, 'sort and separator settings validated');
+
+    // ---------- v1.5: Git sign-in ----------
+    ok(gitauth.helperName('manager').kind === 'gcm' && gitauth.helperName('manager-core').kind === 'gcm' && gitauth.helperName('').kind === 'none' && gitauth.helperName('!gh auth git-credential').kind === 'gh' && gitauth.helperName('store').kind === 'store', 'credential helpers named');
+    ok(gitauth.ACCOUNT_RE.test('levanis-design') && !gitauth.ACCOUNT_RE.test('a b') && !gitauth.ACCOUNT_RE.test('x;rm') && !gitauth.ACCOUNT_RE.test('-x'), 'account names validated');
+    ok(!(await gitauth.logout('bad name')).ok, 'logout refuses a bad account name');
+    const gs = await gitauth.status();
+    ok(gs.ok && /\d/.test(gs.git) && gs.helper && Array.isArray(gs.accounts), `git sign-in status reads (helper: ${gs.helper.label})`);
+    // A fake helper proves the saved login is read without prompting, and never echoed.
+    const fakeHome = path.join(T, 'fakehome'); fs.mkdirSync(fakeHome);
+    const helper = path.join(T, 'fake-helper.sh');
+    fs.writeFileSync(helper, '#!/bin/sh\nif [ "$1" = get ]; then echo username=octo; echo password=gho_abcdefghijklmnopqrstuvwxyz0123; fi\n'); fs.chmodSync(helper, 0o755);
+    const oldHome = process.env.HOME, oldXdg = process.env.XDG_CONFIG_HOME, oldGcs = process.env.GIT_CONFIG_GLOBAL;
+    if (process.platform !== 'win32') {
+      fs.writeFileSync(path.join(fakeHome, '.gitconfig'), `[credential]\n\thelper = ${helper}\n`);
+      process.env.GIT_CONFIG_GLOBAL = path.join(fakeHome, '.gitconfig');
+      const tk = await gitauth.readToken();
+      ok(tk.ok && tk.token === 'gho_abcdefghijklmnopqrstuvwxyz0123' && tk.username === 'octo', 'saved Git login read with prompts off');
+      fs.writeFileSync(path.join(fakeHome, '.gitconfig'), '[credential]\n\thelper =\n');
+      const t0 = Date.now(); const none = await gitauth.readToken();
+      ok(!none.ok && none.notSignedIn && Date.now() - t0 < 10000, 'no saved login: fails fast, no prompt');
+      process.env.GIT_CONFIG_GLOBAL = oldGcs === undefined ? '' : oldGcs; if (oldGcs === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    }
+    void oldHome; void oldXdg;
+
+    // ---------- v1.6: AI viewers and agent sign-ins ----------
+    const al = aitools.links('https://github.com/QwenLM/qwen-code.git');
+    ok(al.ok && al.full === 'QwenLM/qwen-code' && al.services.map((x) => x.url).join() === ['https://gitingest.com/QwenLM/qwen-code', 'https://gitdiagram.com/QwenLM/qwen-code', 'https://deepwiki.com/QwenLM/qwen-code', 'https://gitmcp.io/QwenLM/qwen-code'].join(), 'four AI viewer links built from a GitHub address');
+    ok(aitools.links('mvanhorn/last30days-skill').ok, 'owner/repo accepted');
+    for (const bad of ['https://evil.com/a/b', '../x', 'a/b/c', 'owner/repo"&calc', 'javascript:alert(1)/x', '']) ok(!aitools.links(bad).ok && aitools.url('deepwiki', bad) === '', `refused: ${JSON.stringify(bad)}`);
+    ok(aitools.url('bogus', 'a/b') === '', 'unknown service refused');
+    const mc = aitools.mcpCommand('QwenLM/qwen-code');
+    ok(mc.text === 'claude mcp add --transport http --scope user gitmcp-qwen-code https://gitmcp.io/QwenLM/qwen-code' && mc.args.every((a) => !/["% !^&|<>]/.test(a)), 'GitMCP command is fixed and safe for Windows');
+    const agents = installers.CATALOG.filter((t) => t.group === 'agent').map((t) => t.id);
+    ok(['claude', 'codex', 'gemini', 'copilot', 'qwen', 'kimi', 'ollama', 'opencode', 'kilo', 'cline', 'droid', 'vibe'].every((id) => agents.includes(id)), `agents in the catalog: ${agents.join(', ')}`);
+    ok(agents.every((id) => installers.SIGN_IN[id]), 'every agent has a sign-in command');
+    ok(Object.values(installers.SIGN_IN).every((x) => /^[a-z0-9 .\-]+$/i.test(x.command)) && Object.values(installers.SIGN_OUT).every((c) => /^[a-z0-9 .\-]+$/i.test(c)), 'sign-in and sign-out commands are plain fixed text');
+    ok(installers.installCommand(installers.CATALOG.find((t) => t.id === 'vibe')) === 'uv tool install mistral-vibe' && installers.installCommand(installers.CATALOG.find((t) => t.id === 'kimi')) === 'npm install --global @moonshot-ai/kimi-code', 'uv and npm install commands');
+    ok(process.platform !== 'win32' || installers.installCommand(installers.CATALOG.find((t) => t.id === 'ollama')) === 'winget install --id Ollama.Ollama --exact --source winget', 'Ollama through winget on Windows');
+    ok(installers.PROVIDERS.every((p) => /^https:\/\/(platform\.deepseek\.com|console\.perplexity\.ai|console\.x\.ai)\//.test(p.keyUrl) && p.via.every((v) => installers.CATALOG.some((t) => t.id === v))), 'provider key pages are fixed official addresses');
+    const vs = installers.script(['vibe'], { npmAvailable: true });
+    ok(fs.readFileSync(vs, 'utf8').includes('uv tool install mistral-vibe'), 'installer script runs uv for Mistral Vibe');
+    const chk = await installers.check();
+    ok(chk.providers.length === 3 && chk.tools.find((t) => t.id === 'ollama').signOut && chk.tools.find((t) => t.id === 'qwen').signIn.command === 'qwen', 'check() reports sign-in, sign-out and providers');
+
+    // ---------- v1.7: search history and favorites ----------
+    saved.clearHistory();
+    ok(saved.visit('calesthio/OpenMontage', { description: 'Open video production system', stars: 63182, language: 'Python' }, 'https://github.com/calesthio/OpenMontage').ok, 'search recorded');
+    saved.visit('ollama/ollama', { description: 'Run models' }, 'ollama/ollama');
+    saved.visit('calesthio/OpenMontage', {}, 'openmontage');
+    let hist = saved.all().history;
+    ok(hist.length === 2 && hist[0].full === 'calesthio/OpenMontage' && hist[0].count === 2 && hist[0].stars === 63182 && hist[0].description === 'Open video production system' && hist[0].query === 'openmontage', 'repeat search moves to the top, counts, keeps details');
+    ok(!saved.visit('not a repo', {}, 'x').ok && !saved.visit('../../etc', {}).ok, 'bad names are not recorded');
+    ok(saved.forget('OLLAMA/ollama').removed === 1 && saved.all().history.length === 1, 'one entry removed (case-insensitive)');
+    for (let i = 0; i < saved.HISTORY_MAX + 15; i++) saved.visit(`owner${i}/repo${i}`, {});
+    ok(saved.all().history.length === saved.HISTORY_MAX, `history capped at ${saved.HISTORY_MAX}`);
+    ok(saved.clearHistory().ok && saved.all().history.length === 0, 'history cleared');
+    ok(saved.save('calesthio/OpenMontage', {}).ok && saved.all().bookmarks.length >= 1 && saved.unsave('calesthio/OpenMontage').ok, 'GitHub favorite added and removed');
+    const favDir = R.cached().repos[0];
+    if (favDir) {
+      ok(R.setFavorite(favDir.path, true).ok && R.cached().repos.find((x) => x.path === favDir.path).favorite === true, 'local repository starred and reported');
+      ok(R.setFavorite(favDir.path, false).ok, 'unstar works');
+      ok(R.cached().repos.find((x) => x.path === favDir.path).favorite === false, 'local repository unstarred');
+    } else ok(false, 'no repository in the cached list to star');
+    ok(!R.setFavorite(path.join(T, 'not-a-repo'), true).ok, 'unknown folder cannot be starred');
+    ok(settings.write({ favoritesFirst: false, keepHistory: false }).ok && !settings.write({ keepHistory: 'yes' }).ok, 'favorites and history settings validated');
+    settings.write({ favoritesFirst: true, keepHistory: true });
+
+    // ---------- v1.8: most starred ----------
+    const now = Date.parse('2026-10-23T12:00:00Z');
+    ok(discover.buildQuery({}, now).q === 'stars:>=1000 archived:false', 'all time: stars of at least 1,000, archived hidden');
+    ok(discover.buildQuery({ period: 'week', language: 'Python', topic: 'AI Agents' }, now).q === 'stars:>=10 created:>=2026-10-16 language:Python topic:ai-agents archived:false', 'new this week, language and topic');
+    ok(discover.buildQuery({ language: 'Jupyter Notebook', hideArchived: false }, now).q === 'stars:>=1000 language:"Jupyter Notebook"', 'language with a space is quoted');
+    ok(discover.buildQuery({ text: 'video editor stars:>1 user:x "q"' }, now).q === 'video editor stars 1 user x q stars:>=1000 archived:false', 'keywords cannot add their own search rules');
+    ok(!discover.buildQuery({ period: 'decade' }).ok && !discover.buildQuery({ topic: 'bad topic!' }).ok && !discover.buildQuery({ language: 'x"y' }).ok, 'bad period, topic and language refused');
+    const github2 = require('../github');
+    const realFetch = github2.doFetch;
+    let asked = '';
+    github2.doFetch = async (u) => { asked = u; return { ok: true, status: 200, headers: new Map([['x-ratelimit-remaining', '9']]), json: async () => ({ total_count: 4200000, incomplete_results: false, items: [{ full_name: 'a/b', owner: { login: 'a', avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' }, description: 'd', stargazers_count: 500000, forks_count: 9, language: 'TypeScript', license: { spdx_id: 'MIT' }, topics: ['x'], created_at: '2020-01-01T00:00:00Z', pushed_at: '2026-10-22T00:00:00Z', archived: false }] }) }; };
+    const sr = await discover.search({ language: 'TypeScript' }, 1);
+    ok(sr.ok && sr.total === 1000 && sr.totalFound === 4200000 && sr.hasMore && sr.items[0].full === 'a/b' && sr.items[0].avatar.endsWith('&s=64') && sr.items[0].license === 'MIT', 'results shaped; total capped at 1,000');
+    ok(/sort=stars&order=desc&per_page=30&page=1$/.test(asked) && asked.includes(encodeURIComponent('language:TypeScript')), 'asks GitHub to sort by stars');
+    asked = '';
+    const again = await discover.search({ language: 'TypeScript' }, 1);
+    ok(again.cached && asked === '', 'same page comes from the 30-minute cache');
+    github2.doFetch = async () => ({ ok: false, status: 403, headers: new Map([['x-ratelimit-reset', String(Math.round(Date.now() / 1000) + 40)]]) });
+    const lim = await discover.search({ language: 'Go' }, 1);
+    ok(!lim.ok && lim.limited && /searches a minute/.test(lim.error) && lim.retryIn >= 5, 'search limit explained with a wait time');
+    const p99 = await discover.search({ language: 'Rust' }, 999);
+    ok(!p99.ok || p99.page <= 34, 'page number kept within GitHub\'s 1,000 results');
+    github2.doFetch = realFetch;
   } catch (e) {
     failed += 1;
     console.log('FAIL unexpected error:', e && e.stack || e);
